@@ -55,7 +55,7 @@ individual changes. The app explains every change it makes (in the log, in the t
 
 Requirements: Windows 10 1809+ or Windows 11. Nothing else; the published exe includes .NET.
 
-1. Copy `publish\DualNetwork.exe` somewhere permanent, e.g. `C:\Program Files\Dual Network\`.
+1. Download **DualNetwork.exe** from the [latest release](https://github.com/silvermgs24/DualNetwork/releases/latest) and put it somewhere permanent, e.g. `C:\Program Files\Dual Network\`.
 2. Run it once and accept the Windows **Administrator** prompt. Changing routes needs admin rights; the
    app asks for them by itself.
 
