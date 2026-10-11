@@ -1,0 +1,78 @@
+<Window x:Class="DualNetwork.App.ConfirmWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Dual Network" Width="640" SizeToContent="Height" MaxHeight="760"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Background="White" FontFamily="{StaticResource UiFont}" Foreground="{StaticResource Text}"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource WindowBg}" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0" Padding="24,14">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="CancelButton" Content="Cancel" IsCancel="True" Width="100" Margin="0,0,10,0" />
+                    <Button x:Name="ApplyButton" Content="Apply" IsDefault="True" Width="100" Style="{StaticResource PrimaryButton}" Click="Apply_Click" />
+                </StackPanel>
+                <TextBlock x:Name="FooterText" Style="{StaticResource Muted}" VerticalAlignment="Center" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,16,0"
+                           Text="All changes are temporary: they are removed when you disable Dual Network Mode or restart Windows." />
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="28,22,28,18">
+                <TextBlock x:Name="TitleText" FontSize="19" FontWeight="SemiBold" Margin="0,0,0,14" />
+
+                <ItemsControl x:Name="SummaryList">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,3">
+                                <TextBlock Text="✓" Foreground="{StaticResource Good}" FontWeight="Bold" Width="22" />
+                                <TextBlock Text="{Binding}" FontSize="14" TextWrapping="Wrap" MaxWidth="540" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ItemsControl x:Name="WarningList" Margin="0,12,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{Binding Severity, Converter={StaticResource SeveritySoftBrush}}" CornerRadius="6" Padding="10,7" Margin="0,3">
+                                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="12.5" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Expander x:Name="ChangesExpander" Header="Exact Windows changes" Margin="0,16,0,0" FontSize="13">
+                    <StackPanel Margin="0,8,0,0">
+                        <TextBlock Style="{StaticResource Muted}" Margin="0,0,0,8" FontSize="12"
+                                   Text="Routes are created with the IP Helper API (CreateIpForwardEntry2) in the active, non-persistent store. The equivalent PowerShell commands are shown for reference." />
+                        <ItemsControl x:Name="ChangeList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,8">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Command}" Style="{StaticResource Mono}" TextWrapping="Wrap" FontSize="11.5" />
+                                            <TextBlock Text="{Binding Reason}" Style="{StaticResource Muted}" FontSize="12" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="NoChangesText" Text="No routes or DNS rules need to be added right now. Dual Network Mode will monitor the network and act only if needed."
+                                   Style="{StaticResource Muted}" />
+                    </StackPanel>
+                </Expander>
+
+                <Expander x:Name="PreservedExpander" Header="Preserved (not modified)" Margin="0,8,0,0" FontSize="13">
+                    <ItemsControl x:Name="PreservedList" Margin="0,8,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" Style="{StaticResource Mono}" TextWrapping="Wrap" Margin="0,2" FontSize="11.5" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Windows implementation: IP Helper API, NRPT, monitoring, diagnostics, persistence. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>DualNetwork.Windows</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DualNetwork.Core\DualNetwork.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Only for the notification-area (tray) icon. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>DualNetwork.App</RootNamespace>
+    <AssemblyName>DualNetwork</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\DualNetwork.ico</ApplicationIcon>
+    <!-- DPI awareness is declared in app.manifest for WPF; the WinForms analyzer suggestion does not apply. -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- WinForms is referenced only for NotifyIcon; keep WPF types unambiguous. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Resource Include="Assets\DualNetwork.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DualNetwork.Core\DualNetwork.Core.csproj" />
+    <ProjectReference Include="..\DualNetwork.Windows\DualNetwork.Windows.csproj" />
+  </ItemGroup>
+</Project>
