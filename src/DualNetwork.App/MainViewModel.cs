@@ -7,6 +7,7 @@ using System.Windows.Threading;
 using DualNetwork.Core.Control;
 using DualNetwork.Core.Model;
 using DualNetwork.Core.Planning;
+using DualNetwork.Core.Routing;
 using DualNetwork.Windows;
 
 namespace DualNetwork.App;
@@ -28,7 +29,7 @@ public sealed class MainViewModel : ObservableObject
         PrimaryCommand = new RelayCommand(OnPrimaryAsync, () => !IsBusy);
         ResumeCommand = new RelayCommand(ResumeAsync, () => !IsBusy);
         RestoreCommand = new RelayCommand(RestoreAsync, () => !IsBusy);
-        RefreshCommand = new RelayCommand(() => RefreshAsync(manual: true), () => !IsBusy);
+        RefreshCommand = new RelayCommand(async () => { await RefreshAsync(manual: true); await ReloadPermanentAsync(force: true); }, () => !IsBusy);
         RunTestCommand = new RelayCommand(RunTestAsync, () => !IsTesting);
         RestartAsAdminCommand = new RelayCommand(RestartAsAdmin);
         SaveSettingsCommand = new RelayCommand(SaveSettingsAsync, () => !IsBusy);
@@ -253,6 +254,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         ApplyStartWithWindows();
+        await ReloadPermanentAsync(force: true);
         _initialized = true;
         NotifyIfChanged();
         _host.Monitor.Start();
@@ -269,6 +271,7 @@ public sealed class MainViewModel : ObservableObject
             if (_host.Controller.IsEnabled) Report(await _host.Controller.ReconcileAsync(reason));
             else await _host.Controller.PreviewAsync();
             await _ui.InvokeAsync(() => { UpdateView(); NotifyIfChanged(); });
+            await _ui.InvokeAsync(() => ReloadPermanentAsync()).Task.Unwrap();
         }
         catch (Exception ex)
         {
@@ -282,7 +285,7 @@ public sealed class MainViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            if (manual) _host.InvalidateCaches();
+            if (manual) { _host.InvalidateCaches(); _permanentLoadedAt = DateTime.MinValue; }
             if (_host.Controller.IsEnabled) Report(await _host.Controller.ReconcileAsync(manual ? "Manual refresh" : "Settings changed"));
             else await _host.Controller.PreviewAsync();
         }
@@ -514,7 +517,7 @@ public sealed class MainViewModel : ObservableObject
     {
         try
         {
-            var path = SupportReport.Write(_host, TestResults.ToList());
+            var path = SupportReport.Write(_host, TestResults.ToList(), permanent: _permanent);
             _host.Log.Write(LogLevel.Info, $"Support report saved: {path}");
             Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
         }
@@ -587,6 +590,154 @@ public sealed class MainViewModel : ObservableObject
         if (preferClient == (_host.Settings.Planner.InternetPreference == InternetPreference.ClientNetwork)) return;
         PreferClientInternet = preferClient;
         await SaveSettingsAsync();
+    }
+
+    // ------------------------------------------------------------------ permanent routes
+
+    public ObservableCollection<PermanentRouteViewModel> PermanentRoutes { get; } = new();
+    public ObservableCollection<RemovedRouteViewModel> RemovedRoutes { get; } = new();
+
+    private IReadOnlyList<PersistentRoute> _permanent = Array.Empty<PersistentRoute>();
+    private DateTime _permanentLoadedAt = DateTime.MinValue;
+
+    private string _permanentStatus = "";
+    public string PermanentStatus { get => _permanentStatus; set => Set(ref _permanentStatus, value); }
+
+    public bool CanEditPermanent => _host.PersistentRoutes.CanModify;
+
+    /// <summary>Reads both permanent stores (PowerShell, ~1 s), so it runs at start, after actions, on demand and every few minutes.</summary>
+    private async Task ReloadPermanentAsync(bool force = false)
+    {
+        if (!force && DateTime.UtcNow - _permanentLoadedAt < TimeSpan.FromMinutes(5)) { ShowPermanent(); return; }
+        try
+        {
+            _permanent = await _host.PersistentRoutes.ListAsync();
+            _permanentLoadedAt = DateTime.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            _host.Log.Write(LogLevel.Warning, $"Could not read permanent routes: {ex.Message}");
+        }
+        ShowPermanent();
+    }
+
+    private void ShowPermanent()
+    {
+        var state = _host.Controller.LastState;
+        if (state is null) return;
+        var statuses = PersistentRouteAnalyzer.Analyze(_permanent, state, _host.Controller.LastPlan);
+
+        PermanentRoutes.Clear();
+        foreach (var s in statuses)
+        {
+            var route = s.Route;
+            PermanentRoutes.Add(new PermanentRouteViewModel
+            {
+                Route = route,
+                Title = $"{route.Destination}  →  {route.NextHop}",
+                StatusText = s.Active ? $"Active on {s.ViaAdapter}" : s.ViaAdapter is null ? "Inactive on this network" : $"Gateway on {s.ViaAdapter}",
+                Severity = s.Severity == Severity.Warning ? Severity.Warning : s.Active ? Severity.Good : Severity.Info,
+                SourceText = $"metric {route.Metric} · {(route.Source == PersistentRouteSource.RouteExe ? "route -p" : route.Source == PersistentRouteSource.PersistentStore ? "PersistentStore" : "route -p + PersistentStore")}" +
+                             (route.InterfaceAlias is null ? "" : $" · {route.InterfaceAlias}"),
+                Notes = s.Notes,
+                CanConvert = s.CanConvert && CanEditPermanent,
+                RemoveCommand = new RelayCommand(() => RemovePermanentAsync(route), () => CanEditPermanent && !IsBusy),
+                ConvertCommand = new RelayCommand(() => ConvertPermanentAsync(route), () => CanEditPermanent && !IsBusy && s.CanConvert),
+            });
+        }
+
+        RemovedRoutes.Clear();
+        foreach (var r in _host.PersistentRoutes.LoadRemoved())
+        {
+            var route = r.Route;
+            RemovedRoutes.Add(new RemovedRouteViewModel
+            {
+                Title = $"{route.Destination}  →  {route.NextHop}",
+                When = $"Removed {r.RemovedAt:yyyy-MM-dd HH:mm}",
+                Command = route.ToRouteExe(),
+                RestoreCommand = new RelayCommand(() => RestorePermanentAsync(route), () => CanEditPermanent && !IsBusy),
+                ForgetCommand = new RelayCommand(() => { _host.PersistentRoutes.ForgetRemoved(route); ShowPermanent(); }),
+            });
+        }
+
+        PermanentStatus = _permanent.Count == 0
+            ? "No permanent routes. Windows only uses the routes of your networks (and Dual Network's temporary ones)."
+            : $"{_permanent.Count} permanent route(s). They apply on every network and survive restarts. Dual Network never creates these.";
+        UpdatePermanentNotice();
+    }
+
+    private void UpdatePermanentNotice()
+    {
+        const string marker = "permanent route(s) saved in Windows";
+        foreach (var old in Notices.Where(n => n.Text.Contains(marker)).ToList()) Notices.Remove(old);
+        if (_permanent.Count == 0) return;
+        var example = _permanent[0];
+        Notices.Add(new Notice(Severity.Info,
+            $"{_permanent.Count} {marker} outside Dual Network (e.g. {example}). They apply at every site — see the Permanent routes tab."));
+    }
+
+    private async Task RemovePermanentAsync(PersistentRoute route)
+    {
+        var answer = MessageBox.Show(
+            $"Remove the permanent route {route.Destination} → {route.NextHop}?\n\n" +
+            "It is removed from Windows now and will not come back after a restart.\n" +
+            "You can restore it later from \"Removed by Dual Network\" on this tab.",
+            "Remove permanent route", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.OK) return;
+        await RunPermanentActionAsync($"Removed permanent route {route} (was: {route.ToRouteExe()})",
+            () => _host.PersistentRoutes.RemoveAsync(route));
+    }
+
+    /// <summary>Replace a permanent route with a Dual Network client network: it then applies only while plugged into a client.</summary>
+    private async Task ConvertPermanentAsync(PersistentRoute route)
+    {
+        var answer = MessageBox.Show(
+            $"Convert {route.Destination} into a Dual Network client network?\n\n" +
+            $"• Dual Network will send {route.Destination} to the client network whenever you are plugged into a client — and never otherwise.\n" +
+            $"• The permanent route {route.Destination} → {route.NextHop} is removed from Windows (restorable from this tab).",
+            "Convert permanent route", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.OK) return;
+
+        var text = route.Destination.ToString();
+        if (!_host.Settings.Planner.ExtraClientPrefixes.Contains(text))
+        {
+            _host.Settings.Planner.ExtraClientPrefixes.Add(text);
+            _host.SaveSettings(_host.Settings);
+            LoadSettingsIntoForm();
+        }
+        await RunPermanentActionAsync($"Converted permanent route {route} into the Dual Network client network {text}",
+            () => _host.PersistentRoutes.RemoveAsync(route));
+    }
+
+    private async Task RestorePermanentAsync(PersistentRoute route)
+    {
+        var answer = MessageBox.Show(
+            $"Restore the permanent route {route.Destination} → {route.NextHop}?\n\nWindows will apply it on every network again, also after restarts.",
+            "Restore permanent route", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.OK) return;
+        await RunPermanentActionAsync($"Restored permanent route {route} ({route.ToRouteExe()})",
+            () => _host.PersistentRoutes.RestoreAsync(route));
+    }
+
+    private async Task RunPermanentActionAsync(string logText, Func<Task> action)
+    {
+        IsBusy = true;
+        try
+        {
+            await action();
+            _host.Log.Write(LogLevel.Success, logText);
+        }
+        catch (Exception ex)
+        {
+            _host.Log.Write(LogLevel.Error, ex.Message);
+            MessageBox.Show(ex.Message, "Dual Network", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+        await RefreshAsync(manual: true);   // routing changed: re-plan (and re-apply when on)
+        await ReloadPermanentAsync(force: true);
     }
 
     // ------------------------------------------------------------------ view building
@@ -670,6 +821,7 @@ public sealed class MainViewModel : ObservableObject
         if (!IsElevated) Notices.Add(new Notice(Severity.Warning, "Administrator rights were not granted, so Dual Network can only show status. Click Restart as Administrator (or Turn on) and accept the Windows prompt."));
         if (Mode != ModeState.Standby) foreach (var r in plan.RefusalReasons) Notices.Add(new Notice(Severity.Problem, r));
         foreach (var w in plan.Warnings) Notices.Add(new Notice(w.Severity, w.Text));
+        ShowPermanent();
 
         Preserved.Clear();
         foreach (var p in plan.Preserved) Preserved.Add(p);

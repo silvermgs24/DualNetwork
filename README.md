@@ -114,6 +114,8 @@ The app does everything on its own; the CLI is only for scripting and troublesho
 | `dualnet startup on\|off` | Register or remove the sign-in task | yes |
 | `dualnet snapshot` | Dump the current configuration as JSON | no |
 | `dualnet report` | Save a support report (adapters, routes, DNS rules, plan, network test, log) to the Desktop | no |
+| `dualnet permanent` | Permanent routes and what they do on this network | no |
+| `dualnet permanent remove <prefix> <nexthop>` (or `restore`) | Remove a permanent route (kept for undo) or restore it | yes |
 
 ## The app
 
@@ -122,10 +124,20 @@ The app does everything on its own; the CLI is only for scripting and troublesho
 | **Overview** | Dual Network Mode (ON / STANDBY / OFF) with one **Turn on / Turn off** button, live routing status (asked from Windows via `GetBestRoute2`), DNS per adapter, notices, and every adapter with IP, subnet, gateway, metric, DNS, DHCP/static, speed and role (Internet / Client Network / VPN / Virtual). |
 | **Diagnostics** | Network status summary, **Run Network Test** and **Save report**. The test covers link state, gateway ping, each client DNS server queried directly (and which adapter Windows uses to reach it), Internet test (`msftconnecttest`), whether Ethernet itself has Internet, public and internal DNS resolution, and the real default route and client route. Advanced mode adds the full routing table, with Dual Network's routes marked ★. |
 | **Log** | A timestamped log for troubleshooting, including the self-checks. *Show decision details* adds the planner's step-by-step trace. Also written to `%LOCALAPPDATA%\DualNetwork\logs`. |
+| **Permanent routes** | Every route saved permanently in Windows (`route -p`, PersistentStore), and what it does on the current network: active, inactive (gateway not here) or conflicting (e.g. it swallows the Wi-Fi network). **Remove** deletes it from Windows (verified, restorable). **Convert to client network** replaces it with a Dual Network client network, so it applies only while you are plugged into a client. Removed routes can be restored with one click. |
 | **Settings** | Start with Windows, notifications, overriding the adapters (e.g. USB tethering), the preferred Internet path when both networks have Internet, client ranges and extra client networks, internal domains, split DNS on/off, and Advanced mode. Saved settings take effect immediately. |
 
 ![Monitoring log](docs/screenshots/4-log-monitoring.png)
 ![Diagnostics](docs/screenshots/5-diagnostics.png)
+
+### Permanent routes (`route -p`)
+
+Routes added with `route -p` stay on the laptop forever and apply at **every** site, including where they make no
+sense. The **Permanent routes** tab shows each one, says what it does on the network you're on right now, and
+lets you remove it (with undo) or convert it into a Dual Network client network, which applies only while you're
+plugged into a client. The Overview also mentions when permanent routes exist.
+
+![Permanent routes](docs/screenshots/6-permanent-routes.png)
 
 ## When it refuses to act
 
@@ -152,7 +164,7 @@ with a warning. Full table: [docs/DESIGN.md §5](docs/DESIGN.md).
 | Crash or kill | At the next start the journal is detected and the app adopts the leftover changes (when on) or removes them (when off) by itself. `dualnet restore` does the same from a shell. |
 | Self-check after every change | `GetBestRoute2` must show Internet → Wi-Fi and the client network → Ethernet, and `Get-NetRoute -PolicyStore PersistentStore` must not contain any route the app created. A failed check is logged and shown as a red notification. |
 | Hard limits in the writer | It never creates a `/0`, never touches VPN or loopback adapters, rejects next hops outside the adapter's subnet, verifies each route after creating it, and refuses to remove an NRPT rule without the tag. |
-| Never | Disable adapters, change interface metrics, replace DNS servers, edit or delete routes it didn't create |
+| Never (on its own) | Disable adapters, change interface metrics, replace DNS servers, edit or delete routes it didn't create. Permanent routes are only changed when you click Remove or Convert on the Permanent routes tab, and every removal can be restored. |
 | Persistent footprint | Only the Task Scheduler sign-in task "Dual Network" (Settings → Start with Windows) and the app's own files under `%ProgramData%` and `%LOCALAPPDATA%`. |
 
 ## Architecture
@@ -201,7 +213,7 @@ the demo.
 dotnet test tests/DualNetwork.Core.Tests
 ```
 
-92 tests cover:
+99 tests cover:
 
 * the two core cases from the spec (Ethernet with and without a gateway);
 * client ranges derived from the actual address rather than hard-coded;
@@ -217,16 +229,18 @@ dotnet test tests/DualNetwork.Core.Tests
 * the first real site visit: a Wi-Fi hotspot inside 10.0.0.0/8, client DNS and servers in 10.0.x.x, and a Tailscale route for 10.0.0.0/8 (the client network now wins for its own ranges, and the client DNS servers are always routed to the client network);
 * split DNS that switches itself off when the client DNS cannot be used, and is tried again on the next network;
 * automatic mode: activation without a client network (stand by, then apply when the cable is plugged in, with the snapshot taken right before the first change), idempotence, failed self-checks, and the admin requirement;
+* permanent routes: parsing the `route -p` store, merging both stores, and explaining active, inactive and conflicting routes;
 * prefix maths, adapter classification, route selection and snapshot diffs.
 
 ## Verification status
 
 | Area | Status |
 |---|---|
-| Decision engine, controller, automatic mode | ✅ 92 unit tests passing, including a reproduction of the first site visit (hotspot in 10.x, Tailscale routing 10.0.0.0/8, DNS in 10.0.x.x) |
+| Decision engine, controller, automatic mode | ✅ 99 unit tests passing, including a reproduction of the first site visit (hotspot in 10.x, Tailscale routing 10.0.0.0/8, DNS in 10.0.x.x) |
 | Reading adapters, routes and metrics via the IP Helper API | ✅ Verified live: the struct offsets match `Get-NetRoute` and `Get-NetIPInterface` exactly |
 | `GetBestRoute2`, Internet probe, ping/DNS/HTTP diagnostics, NRPT listing, persistent-store query | ✅ Verified live, non-elevated |
 | Automatic flow: turns on at launch → applies → self-check → unplug/replug → Turn off/on; close-to-tray; second launch brings the window back | ✅ Verified in `--demo` (UI Automation + screenshots) |
 | Sign-in task definition | ✅ Same XML registered at standard privilege under a test name, read back, then deleted. The real (highest-privilege) registration happens when the elevated app first runs. |
 | Self-contained single-file exe | ✅ Published and launched |
+| Permanent routes tab: list, analysis, Remove, Restore, Convert | ✅ Verified in `--demo` (UI Automation + screenshots). Reading both real stores verified live, non-elevated. ⚠️ Real removal and restore (route.exe + Remove-NetRoute, verified by reading back) not yet run elevated. |
 | Creating and deleting routes and NRPT rules on a real system, elevated | ⚠️ **Not yet run**: the development VM has no Wi-Fi and this session could not accept a UAC prompt. The app now checks this itself after every change (self-check above), so the first real run reports in the log whether Windows routes as planned. |

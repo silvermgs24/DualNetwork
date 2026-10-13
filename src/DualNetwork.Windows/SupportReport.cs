@@ -12,7 +12,8 @@ namespace DualNetwork.Windows;
 /// </summary>
 public static class SupportReport
 {
-    public static string Write(DualNetworkHost host, IReadOnlyList<DiagnosticResult>? lastTest, string? folder = null)
+    public static string Write(DualNetworkHost host, IReadOnlyList<DiagnosticResult>? lastTest, string? folder = null,
+        IReadOnlyList<DualNetwork.Core.Routing.PersistentRoute>? permanent = null)
     {
         var c = host.Controller;
         var state = c.LastState;
@@ -54,6 +55,15 @@ public static class SupportReport
             foreach (var p in plan.Preserved) sb.AppendLine("preserved: " + p);
             sb.AppendLine("--- decision trace");
             foreach (var t in plan.Trace) sb.AppendLine("  " + t);
+            sb.AppendLine();
+        }
+
+        if (permanent is not null)
+        {
+            sb.AppendLine("=== PERMANENT ROUTES (route -p / PersistentStore)");
+            if (permanent.Count == 0) sb.AppendLine("(none)");
+            foreach (var p in permanent) sb.AppendLine($"{p}  metric {p.Metric}  {p.Source}{(p.InterfaceAlias is null ? "" : $"  {p.InterfaceAlias}")}");
+            foreach (var r in host.PersistentRoutes.LoadRemoved()) sb.AppendLine($"removed {r.RemovedAt:yyyy-MM-dd HH:mm}: {r.Route}");
             sb.AppendLine();
         }
 

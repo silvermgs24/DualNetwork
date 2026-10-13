@@ -29,6 +29,7 @@ switch (command)
     case "snapshot": await Snapshot(); break;
     case "startup": Startup(); break;
     case "report": await Report(); break;
+    case "permanent": await Permanent(); break;
     default: Help(); break;
 }
 return Environment.ExitCode;
@@ -45,6 +46,8 @@ void Help() => Console.WriteLine("""
       disable|restore   Remove every change Dual Network made (also cleans up after a crash)
       snapshot          Print the current configuration as JSON
       report            Save a support report (adapters, routes, DNS rules, plan, test, log) to the Desktop
+      permanent         List permanent routes (route -p) and what they do on this network
+      permanent remove|restore <prefix> <nexthop>   Remove one (kept for undo) or restore a removed one
       startup on|off    Start the Dual Network app (elevated, in the tray) at sign-in; no argument shows status
 
       --verbose         Include detailed decision trace in the output
@@ -206,6 +209,41 @@ async Task Report()
 {
     var plan = await host.Controller.PreviewAsync();
     var results = await host.Diagnostics.RunAsync(host.Controller.LastState!, plan, host.Settings.Planner);
-    var path = SupportReport.Write(host, results, args.Length > 1 ? args[1] : null);
+    var permanent = await host.PersistentRoutes.ListAsync();
+    var path = SupportReport.Write(host, results, args.Length > 1 ? args[1] : null, permanent);
     Console.WriteLine($"Report saved: {path}");
+}
+
+async Task Permanent()
+{
+    var action = args.Skip(1).FirstOrDefault()?.ToLowerInvariant();
+    if (action is "remove" or "restore")
+    {
+        if (!await RequireAdmin()) return;
+        if (args.Length < 4 || !DualNetwork.Core.Net.IPv4Prefix.TryParse(args[2], out var prefix) || !System.Net.IPAddress.TryParse(args[3], out var hop))
+        {
+            Console.Error.WriteLine("Usage: dualnet permanent remove|restore <prefix e.g. 10.0.0.0/16> <next hop>");
+            Environment.ExitCode = 2;
+            return;
+        }
+        var key = $"{prefix}|{hop}";
+        var route = action == "remove"
+            ? (await host.PersistentRoutes.ListAsync()).FirstOrDefault(r => r.Key == key)
+            : host.PersistentRoutes.LoadRemoved().Select(r => r.Route).FirstOrDefault(r => r.Key == key);
+        if (route is null) { Console.Error.WriteLine($"No {(action == "remove" ? "permanent" : "removed")} route {prefix} → {hop}."); Environment.ExitCode = 1; return; }
+        if (action == "remove") await host.PersistentRoutes.RemoveAsync(route); else await host.PersistentRoutes.RestoreAsync(route);
+        Console.WriteLine($"{(action == "remove" ? "Removed" : "Restored")} {route} ({route.ToRouteExe()})");
+        return;
+    }
+
+    var plan = await host.Controller.PreviewAsync();
+    var list = await host.PersistentRoutes.ListAsync();
+    if (list.Count == 0) Console.WriteLine("No permanent routes.");
+    foreach (var s in DualNetwork.Core.Routing.PersistentRouteAnalyzer.Analyze(list, host.Controller.LastState!, plan))
+    {
+        Console.WriteLine($"{s.Route}  [{(s.Active ? $"active on {s.ViaAdapter}" : "inactive here")}]  metric {s.Route.Metric}  ({s.Route.Source})");
+        foreach (var n in s.Notes) Console.WriteLine($"    · {n}");
+    }
+    foreach (var r in host.PersistentRoutes.LoadRemoved())
+        Console.WriteLine($"removed {r.RemovedAt:yyyy-MM-dd HH:mm}: {r.Route}   restore: dualnet permanent restore {r.Route.Destination} {r.Route.NextHop}");
 }

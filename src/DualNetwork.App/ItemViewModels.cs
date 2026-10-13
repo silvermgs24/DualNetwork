@@ -112,3 +112,26 @@ public sealed record StatusItem(Severity Severity, string Text);
 public sealed record StatusSection(string Title, IReadOnlyList<StatusItem> Items);
 
 public sealed record RouteRow(string Destination, string NextHop, string Interface, int Metric, int InterfaceMetric, string Protocol, bool IsOurs);
+
+/// <summary>One permanent route on the "Permanent routes" tab, with its actions.</summary>
+public sealed class PermanentRouteViewModel
+{
+    public required DualNetwork.Core.Routing.PersistentRoute Route { get; init; }
+    public required string Title { get; init; }
+    public required string StatusText { get; init; }
+    public required Severity Severity { get; init; }
+    public required string SourceText { get; init; }
+    public required IReadOnlyList<string> Notes { get; init; }
+    public required bool CanConvert { get; init; }
+    public required RelayCommand RemoveCommand { get; init; }
+    public required RelayCommand ConvertCommand { get; init; }
+}
+
+public sealed class RemovedRouteViewModel
+{
+    public required string Title { get; init; }
+    public required string When { get; init; }
+    public required string Command { get; init; }
+    public required RelayCommand RestoreCommand { get; init; }
+    public required RelayCommand ForgetCommand { get; init; }
+}

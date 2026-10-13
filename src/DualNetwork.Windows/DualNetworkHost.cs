@@ -22,6 +22,7 @@ public sealed class DualNetworkHost : IDisposable
             Simulation = new SimulatedNetwork();
             Controller = new DualNetworkController(Simulation, Simulation, Simulation, Simulation, Log, () => Settings.Planner, Simulation);
             BestInterface = Simulation.BestInterface;
+            PersistentRoutes = new SimulatedPersistentRoutes(Simulation);
         }
         else
         {
@@ -29,6 +30,7 @@ public sealed class DualNetworkHost : IDisposable
             _windowsProvider = new WindowsNetworkStateProvider(nrpt, Probe);
             Controller = new DualNetworkController(_windowsProvider, new WindowsRouteWriter(), nrpt, new JsonStateStore(), Log, () => Settings.Planner, new WindowsRouteVerifier());
             BestInterface = WindowsNetworkStateProvider.BestInterface;
+            PersistentRoutes = new PersistentRouteManager();
         }
     }
 
@@ -42,6 +44,8 @@ public sealed class DualNetworkHost : IDisposable
     public DualNetworkController Controller { get; }
     public NetworkMonitor Monitor { get; }
     public DiagnosticsRunner Diagnostics { get; }
+    /// <summary>Routes saved permanently in Windows (route -p): visibility and control.</summary>
+    public IPersistentRouteStore PersistentRoutes { get; }
     /// <summary>Which interface Windows (or the simulation) uses for a destination.</summary>
     public Func<IPAddress, int?> BestInterface { get; }
     public bool IsElevated => IsDemo || Privileges.IsElevated;

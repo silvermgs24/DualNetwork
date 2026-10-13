@@ -65,6 +65,17 @@ public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDns
 
     public int? BestInterface(IPAddress destination) => RouteTable.Lookup(destination, _state.Routes, _state)?.InterfaceIndex;
 
+    /// <summary>Demo: a permanent route is active only while its gateway is on a connected network (like Windows).</summary>
+    public void AddActiveIfReachable(PersistentRoute r)
+    {
+        var adapter = _state.Adapters.FirstOrDefault(a => a.IsUp && a.IsOnLink(r.NextHop));
+        if (adapter is null || _state.Routes.Any(x => x.Destination == r.Destination && x.NextHop.Equals(r.NextHop))) return;
+        _state = _state with { Routes = _state.Routes.Append(new RouteEntry(r.Destination, r.NextHop, adapter.Index, r.Metric, "NetMgmt")).ToList() };
+    }
+
+    public void RemoveActive(PersistentRoute r) =>
+        _state = _state with { Routes = _state.Routes.Where(x => !(x.Destination == r.Destination && x.NextHop.Equals(r.NextHop))).ToList() };
+
     public IReadOnlyList<VerificationResult> Verify(RoutingPlan plan, IReadOnlyList<RouteSpec> applied)
     {
         var results = new List<VerificationResult>();

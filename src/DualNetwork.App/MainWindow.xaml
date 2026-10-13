@@ -369,6 +369,93 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- ============================== Permanent routes -->
+            <TabItem Header="Permanent routes">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,14,0,0">
+                    <StackPanel Margin="4,0,4,8" MaxWidth="980" HorizontalAlignment="Left">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <DockPanel Margin="0,0,0,6">
+                                    <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}" />
+                                    <TextBlock Text="PERMANENT ROUTES (SAVED IN WINDOWS)" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" Margin="0" />
+                                </DockPanel>
+                                <TextBlock Style="{StaticResource Muted}" Margin="0,0,0,14"
+                                           Text="Routes added with &quot;route -p&quot; (or saved in the Windows persistent store) stay on this laptop forever: they apply on every network you join and survive restarts. Here you can see what each one does on the network you are connected to now, remove it, or convert it into a Dual Network client network so it only applies while you are plugged into a client." />
+                                <TextBlock Text="{Binding PermanentStatus}" FontSize="13" Margin="0,0,0,10" TextWrapping="Wrap" />
+                                <TextBlock Style="{StaticResource Muted}" Margin="0,0,0,10" Foreground="{StaticResource Warn}"
+                                           Text="Administrator rights are needed to change permanent routes."
+                                           Visibility="{Binding CanEditPermanent, Converter={StaticResource InverseBoolToVis}}" />
+                                <ItemsControl ItemsSource="{Binding PermanentRoutes}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,0,0,10">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <ContentPresenter Content="{Binding Severity}" ContentTemplate="{StaticResource DotTemplate}" />
+                                                            <TextBlock Text="{Binding Title}" FontFamily="{StaticResource MonoFont}" FontSize="15" FontWeight="SemiBold" Margin="10,0,0,0" VerticalAlignment="Center" />
+                                                            <Border Style="{StaticResource Pill}" Background="{Binding Severity, Converter={StaticResource SeveritySoftBrush}}">
+                                                                <TextBlock Text="{Binding StatusText}" FontSize="11.5" FontWeight="SemiBold" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding SourceText}" Style="{StaticResource Muted}" Margin="20,3,0,4" />
+                                                        <ItemsControl ItemsSource="{Binding Notes}" Margin="20,0,0,0">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding StringFormat=• {0}}" FontSize="12.5" TextWrapping="Wrap" Margin="0,1" />
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Top" Margin="16,0,0,0">
+                                                        <Button Content="Convert to client network" Command="{Binding ConvertCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,0,8"
+                                                                ToolTip="Dual Network routes it only while you are plugged into a client; the permanent route is removed"
+                                                                Visibility="{Binding CanConvert, Converter={StaticResource BoolToVis}}" />
+                                                        <Button Content="Remove" Command="{Binding RemoveCommand}" Style="{StaticResource DangerButton}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}" Visibility="{Binding RemovedRoutes.Count, Converter={StaticResource EmptyToCollapsed}}">
+                            <StackPanel>
+                                <TextBlock Text="REMOVED BY DUAL NETWORK (CAN BE RESTORED)" Style="{StaticResource SectionTitle}" />
+                                <ItemsControl ItemsSource="{Binding RemovedRoutes}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Title}" FontFamily="{StaticResource MonoFont}" FontSize="13.5" />
+                                                    <TextBlock Style="{StaticResource Muted}" FontSize="11.5">
+                                                        <Run Text="{Binding When, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding Command, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" />
+                                                    </TextBlock>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Button Content="Restore" Command="{Binding RestoreCommand}" Margin="0,0,8,0" />
+                                                    <Button Content="Forget" Command="{Binding ForgetCommand}" ToolTip="Remove from this list (does not change Windows)" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- ============================== Log -->
             <TabItem Header="Log">
                 <Border Style="{StaticResource Card}" Margin="4,14,4,16" Padding="0">
