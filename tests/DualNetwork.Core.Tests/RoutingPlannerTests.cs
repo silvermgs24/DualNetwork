@@ -209,21 +209,113 @@ public class RoutingPlannerTests
     }
 
     [Fact]
-    public void Split_tunnel_vpn_keeps_its_routes_and_conflicting_client_range_is_skipped()
+    public void Vpn_route_identical_to_client_range_is_beaten_by_two_halves_by_default()
     {
         var s = Create().WithWiFi().WithEthernet("10.10.10.20/24", gateway: "10.10.10.1")
             .WithVpn("100.101.1.2/32")
-            .Route("10.0.0.0/8", "0.0.0.0", Vpn, 5)     // VPN claims all of 10/8
+            .Route("10.0.0.0/8", "0.0.0.0", Vpn, 5)       // e.g. a Tailscale subnet route for all of 10/8
+            .Route("10.200.0.0/16", "0.0.0.0", Vpn, 5)    // a narrower VPN route: must keep working
             .Build();
 
         var p = Plan(s);
 
         Assert.Equal(PlanStatus.Ready, p.Status);
+        Assert.Contains("10.0.0.0/9", Prefixes(p));
+        Assert.Contains("10.128.0.0/9", Prefixes(p));
         Assert.DoesNotContain("10.0.0.0/8", Prefixes(p));
-        Assert.Contains(p.Warnings, w => w.Text.Contains("VPN"));
-        Assert.Equal(Vpn, Via(s, p, "10.50.0.1"));      // VPN traffic untouched
-        Assert.Equal(Eth, Via(s, p, "10.10.10.5"));     // on-link client subnet still wins (longer)
+        Assert.Equal(Eth, Via(s, p, "10.50.0.1"));        // client network wins for its range
+        Assert.Equal(Vpn, Via(s, p, "10.200.1.1"));       // VPN keeps its more specific route
+        Assert.Equal(Eth, Via(s, p, "10.10.10.5"));
         Assert.Equal(WiFi, Via(s, p, "8.8.8.8"));
+        Assert.Contains(p.Warnings, w => w.Text.Contains("also routes 10.0.0.0/8"));
+    }
+
+    [Fact]
+    public void Vpn_priority_can_be_kept_in_settings()
+    {
+        var s = Create().WithWiFi().WithEthernet("10.10.10.20/24", gateway: "10.10.10.1")
+            .WithVpn("100.101.1.2/32")
+            .Route("10.0.0.0/8", "0.0.0.0", Vpn, 5)
+            .Build();
+
+        var p = Plan(s, new PlannerSettings { ClientNetworkWinsOverVpn = false });
+
+        Assert.DoesNotContain(p.Routes, r => r.Purpose == RoutePurpose.ClientRange);
+        Assert.Equal(Vpn, Via(s, p, "10.50.0.1"));
+    }
+
+    /// <summary>
+    /// Reproduces the first real site visit: Wi-Fi hotspot in 10.99.94.0/24, client Ethernet 10.20.30.130/24 (gateway .254,
+    /// with Internet), internal servers and DNS in 10.0.x.x, split DNS for client-example.org, Tailscale routing 10.0.0.0/8.
+    /// The user's manual fix was "route add 10.0.0.0 mask 255.255.0.0 10.20.30.254".
+    /// </summary>
+    [Fact]
+    public void Site_visit_hotspot_in_10_slash_8_with_tailscale_reaches_internal_10_0_servers_and_dns()
+    {
+        var s = Create()
+            .WithWiFi("10.99.94.68/24", gateway: "10.99.94.132", dns: new[] { "10.99.94.132" })
+            .WithEthernet("10.20.30.130/24", gateway: "10.20.30.254", dns: new[] { "10.0.0.11", "10.0.0.12" },
+                suffix: "client-example.org", internet: InternetStatus.Available)
+            .WithVpn("100.88.1.2/32", "Tailscale")
+            .Route("100.64.0.0/10", "0.0.0.0", Vpn, 5)
+            .Route("10.0.0.0/8", "0.0.0.0", Vpn, 5)
+            .Build();
+
+        var p = Plan(s);
+
+        Assert.Equal(PlanStatus.Ready, p.Status);
+        Assert.Equal(WiFi, Via(s, p, "8.8.8.8"));          // Internet → Wi-Fi
+        Assert.Equal(Eth, Via(s, p, "10.0.0.11"));         // client DNS reachable
+        Assert.Equal(Eth, Via(s, p, "10.0.5.20"));         // internal servers (app.client-example.org) reachable
+        Assert.Equal(Eth, Via(s, p, "10.20.30.10"));       // directly connected client subnet
+        Assert.Equal(WiFi, Via(s, p, "10.99.94.132"));    // Wi-Fi gateway/DNS stays on Wi-Fi
+        Assert.Equal(Vpn, Via(s, p, "100.100.100.100"));   // Tailscale itself untouched
+        Assert.Equal(".client-example.org", Assert.Single(p.NrptRules).Namespace);
+    }
+
+    [Fact]
+    public void Same_site_without_vpn_routes_the_whole_private_block()
+    {
+        var s = Create()
+            .WithWiFi("10.99.94.68/24", gateway: "10.99.94.132", dns: new[] { "10.99.94.132" })
+            .WithEthernet("10.20.30.130/24", gateway: "10.20.30.254", dns: new[] { "10.0.0.11" }, suffix: "client-example.org", internet: InternetStatus.Available)
+            .Build();
+
+        var p = Plan(s);
+
+        Assert.Contains("10.0.0.0/8", Prefixes(p));
+        Assert.Equal(Eth, Via(s, p, "10.0.5.20"));
+        Assert.Equal(Eth, Via(s, p, "10.0.0.11"));
+        Assert.Equal(WiFi, Via(s, p, "10.99.94.50"));
+        Assert.Equal(WiFi, Via(s, p, "1.1.1.1"));
+    }
+
+    [Fact]
+    public void Client_dns_inside_a_vpn_route_is_pinned_to_the_client_network()
+    {
+        var s = Create().WithWiFi().WithEthernet("10.10.10.20/24", gateway: "10.10.10.1", dns: new[] { "172.18.0.53" })
+            .WithVpn("100.101.1.2/32")
+            .Route("172.16.0.0/12", "0.0.0.0", Vpn, 5)
+            .Build();
+
+        var p = Plan(s);
+
+        Assert.Contains("172.18.0.53/32", Prefixes(p));
+        Assert.Equal(Eth, Via(s, p, "172.18.0.53"));
+        Assert.Equal(Vpn, Via(s, p, "172.18.0.54"));       // the rest of that VPN range is untouched
+    }
+
+    [Fact]
+    public void Extra_client_network_from_settings_wins_over_a_vpn_route()
+    {
+        var s = Create().WithWiFi().WithEthernet("10.20.30.130/24", gateway: "10.20.30.254")
+            .WithVpn("100.101.1.2/32")
+            .Route("10.0.0.0/16", "0.0.0.0", Vpn, 5)
+            .Build();
+
+        var p = Plan(s, new PlannerSettings { RouteContainingPrivateBlock = false, ExtraClientPrefixes = { "10.0.0.0/16" } });
+
+        Assert.Equal(Eth, Via(s, p, "10.0.5.20"));
     }
 
     [Fact]

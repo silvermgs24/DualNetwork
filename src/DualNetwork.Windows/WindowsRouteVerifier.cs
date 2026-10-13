@@ -43,6 +43,22 @@ public sealed class WindowsRouteVerifier : IRouteVerifier
                 var ok = best?.InterfaceIndex == client.Index || best?.Prefix.Length > r.Destination.Length;
                 results.Add(new VerificationResult(ok, ok ? $"{r.Destination} → {client.Name}" : $"{r.Destination} → {Name(plan, best?.InterfaceIndex)}, expected {client.Name}"));
             }
+
+            // Client DNS must be reachable over the client network and actually answer — otherwise internal names fail.
+            var domain = plan.NrptRules.FirstOrDefault()?.Namespace.TrimStart('.') ?? RoutingPlanner.NormalizeDomain(client.DnsSuffix);
+            foreach (var dns in client.DnsServersV4.Distinct())
+            {
+                var best = IpHelper.BestRoute(dns);
+                var routeOk = best?.InterfaceIndex == client.Index;
+                var answer = DnsProbe.QueryAsync(dns, domain ?? ".").GetAwaiter().GetResult();
+                // With a domain, only a real answer proves the server can serve split DNS; without one, any reply proves reachability.
+                var answered = domain is null ? answer.Outcome != DnsProbe.Outcome.NoResponse : answer.Outcome == DnsProbe.Outcome.Answered;
+                results.Add(new VerificationResult(routeOk && answered,
+                    !routeOk ? $"Client DNS {dns} → {Name(plan, best?.InterfaceIndex)}, expected {client.Name}"
+                    : answered ? $"Client DNS {dns} → {client.Name}, answers{(domain is null ? "" : $" for {domain}")} ({answer.Milliseconds} ms)"
+                    : $"Client DNS {dns} → {client.Name}, but: {answer.Detail}",
+                    VerificationIssue.ClientDnsUnusable));
+            }
         }
 
         if (applied.Count > 0) results.Add(CheckNotPersistent(applied));
@@ -73,5 +89,7 @@ public sealed class WindowsRouteVerifier : IRouteVerifier
         index is null ? "no route"
         : plan.InternetAdapter?.Index == index ? plan.InternetAdapter.Name
         : plan.ClientAdapter?.Index == index ? plan.ClientAdapter.Name
-        : $"interface {index}";
+        : System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+              .FirstOrDefault(n => { try { return n.GetIPProperties().GetIPv4Properties()?.Index == index; } catch { return false; } })?.Name
+          ?? $"interface {index}";
 }

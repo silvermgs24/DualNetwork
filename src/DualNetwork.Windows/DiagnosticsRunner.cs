@@ -37,9 +37,17 @@ public sealed class DiagnosticsRunner
         if (wifi?.Gateway is not null)
             results.Add(await PingResult("Wi-Fi gateway", wifi.Gateway, ct));
 
-        // 3. Internal reachability
+        var domains = new List<string>();
+        if (RoutingPlanner.NormalizeDomain(client?.DnsSuffix) is { } suffix) domains.Add(suffix);
+        domains.AddRange(settings.ExtraInternalDomains.Select(RoutingPlanner.NormalizeDomain).Where(d => d is not null).Select(d => d!));
+        domains = domains.Distinct().ToList();
+
+        // 3. Internal reachability: each client DNS server is asked directly (the gateway was pinged above)
         if (client?.HasUsableIPv4 == true)
-            results.Add(await InternalReachability(client, ct));
+        {
+            foreach (var dns in client.DnsServersV4.Distinct())
+                results.Add(await ClientDnsResult(dns, client, domains.FirstOrDefault(), state, ct));
+        }
 
         // 4. Internet
         results.Add(await InternetResult(ct));
@@ -55,10 +63,7 @@ public sealed class DiagnosticsRunner
 
         // 5. DNS
         results.Add(await ResolveResult("DNS resolution (public)", "www.microsoft.com", Severity.Problem, ct));
-        var domains = new List<string>();
-        if (RoutingPlanner.NormalizeDomain(client?.DnsSuffix) is { } suffix) domains.Add(suffix);
-        domains.AddRange(settings.ExtraInternalDomains.Select(RoutingPlanner.NormalizeDomain).Where(d => d is not null).Select(d => d!));
-        foreach (var d in domains.Distinct())
+        foreach (var d in domains)
             results.Add(await ResolveResult($"DNS resolution (internal: {d})", d, Severity.Warning, ct));
         if (domains.Count == 0 && client?.HasUsableIPv4 == true)
             results.Add(new DiagnosticResult("DNS resolution (internal)", Severity.Info, "No internal domain known — add one in Settings to test it"));
@@ -111,26 +116,22 @@ public sealed class DiagnosticsRunner
         return null;
     }
 
-    private static async Task<DiagnosticResult> InternalReachability(AdapterInfo client, CancellationToken ct)
+    /// <summary>Asks one client DNS server directly, and says which adapter Windows uses to reach it.</summary>
+    private static async Task<DiagnosticResult> ClientDnsResult(IPAddress dns, AdapterInfo client, string? domain, NetworkState state, CancellationToken ct)
     {
-        var reached = new List<string>();
-        var tried = new List<string>();
-        foreach (var dns in client.DnsServersV4.Distinct())
+        var best = IpHelper.BestRoute(dns);
+        var via = best is null ? "no route" : state.Adapter(best.Value.InterfaceIndex)?.Name ?? $"interface {best.Value.InterfaceIndex}";
+        var wrongPath = best?.InterfaceIndex != client.Index;
+        var r = await DnsProbe.QueryAsync(dns, domain ?? ".", ct: ct);
+        var name = $"Client DNS {dns}";
+        return r.Outcome switch
         {
-            tried.Add($"DNS {dns}");
-            if (await TcpAsync(dns, 53, ct) || await PingAsync(dns, ct) is not null) reached.Add($"DNS {dns}");
-        }
-        if (client.Gateway is not null)
-        {
-            tried.Add($"gateway {client.Gateway}");
-            if (await PingAsync(client.Gateway, ct) is not null) reached.Add($"gateway {client.Gateway}");
-        }
-        if (tried.Count == 0)
-            return new DiagnosticResult("Internal network reachability", Severity.Info,
-                $"Connected to {string.Join(", ", client.Subnets)}; no gateway or DNS server to test against");
-        return reached.Count > 0
-            ? new DiagnosticResult("Internal network reachability", Severity.Good, $"Reached {string.Join(", ", reached)}")
-            : new DiagnosticResult("Internal network reachability", Severity.Warning, $"No reply from {string.Join(", ", tried)} (may be filtered)");
+            DnsProbe.Outcome.Answered => new DiagnosticResult(name, Severity.Good, $"Answered{(domain is null ? "" : $" for {domain}")} in {r.Milliseconds} ms (via {via})"),
+            DnsProbe.Outcome.NameNotFound or DnsProbe.Outcome.ServerFailure => new DiagnosticResult(name, Severity.Warning, $"{r.Detail} (via {via})"),
+            _ => new DiagnosticResult(name, Severity.Problem, wrongPath
+                ? $"No answer: Windows sends it to {via} instead of {client.Name}. Internal names cannot be resolved."
+                : $"No answer via {via}. Internal names cannot be resolved (the server may be down or filtered)."),
+        };
     }
 
     private static async Task<bool> TcpAsync(IPAddress host, int port, CancellationToken ct)

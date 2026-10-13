@@ -88,7 +88,9 @@ public static class JsonDefaults
     }
 }
 
-public sealed record VerificationResult(bool Ok, string Message);
+public enum VerificationIssue { None, ClientDnsUnusable }
+
+public sealed record VerificationResult(bool Ok, string Message, VerificationIssue Issue = VerificationIssue.None);
 
 /// <summary>Checks, after changes were applied, that the OS really routes as planned (ground truth, not simulation).</summary>
 public interface IRouteVerifier

@@ -28,8 +28,18 @@ public sealed class PlannerSettings
     public List<string> ExtraClientPrefixes { get; set; } = new();
     /// <summary>Internal DNS namespaces to resolve via the client DNS, in addition to the DHCP-provided suffix.</summary>
     public List<string> ExtraInternalDomains { get; set; } = new();
+    /// <summary>
+    /// When a VPN routes the same addresses as the client network (e.g. a Tailscale subnet route for 10.0.0.0/8),
+    /// let the client network win for its own ranges while connected. The VPN keeps its more specific routes.
+    /// </summary>
+    public bool ClientNetworkWinsOverVpn { get; set; } = true;
     /// <summary>Create NRPT rules so internal domains always use the client DNS servers.</summary>
     public bool ManageDns { get; set; } = true;
+    /// <summary>Set by the controller when split DNS was switched off for the current client network (why, for the UI).</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public string? SplitDnsDisabledReason { get; set; }
+
+    public PlannerSettings Clone() => (PlannerSettings)MemberwiseClone();
+
     /// <summary>Route metric used for routes we add. Only matters for ties of equal prefix length.</summary>
     public int RouteMetric { get; set; } = 5;
 }

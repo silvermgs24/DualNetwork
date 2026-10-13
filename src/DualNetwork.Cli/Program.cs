@@ -28,6 +28,7 @@ switch (command)
     case "run": await Run(); break;
     case "snapshot": await Snapshot(); break;
     case "startup": Startup(); break;
+    case "report": await Report(); break;
     default: Help(); break;
 }
 return Environment.ExitCode;
@@ -43,6 +44,7 @@ void Help() => Console.WriteLine("""
       run               Enable and keep monitoring until Ctrl+C, then restore (requires Administrator)
       disable|restore   Remove every change Dual Network made (also cleans up after a crash)
       snapshot          Print the current configuration as JSON
+      report            Save a support report (adapters, routes, DNS rules, plan, test, log) to the Desktop
       startup on|off    Start the Dual Network app (elevated, in the tray) at sign-in; no argument shows status
 
       --verbose         Include detailed decision trace in the output
@@ -198,4 +200,12 @@ void Startup()
     else if (arg == "selftest") { Console.WriteLine(StartupTaskSelfTest.Run(Path.GetFullPath(args[2]))); return; }
     var path = StartupTask.RegisteredPath();
     Console.WriteLine(path is null ? "Start with Windows: off" : $"Start with Windows: on → {path} {StartupTask.BackgroundArgument}");
+}
+
+async Task Report()
+{
+    var plan = await host.Controller.PreviewAsync();
+    var results = await host.Diagnostics.RunAsync(host.Controller.LastState!, plan, host.Settings.Planner);
+    var path = SupportReport.Write(host, results, args.Length > 1 ? args[1] : null);
+    Console.WriteLine($"Report saved: {path}");
 }

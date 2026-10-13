@@ -25,24 +25,24 @@ public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDns
             new()
             {
                 Index = WiFi, Name = "Wi-Fi", Description = "Intel(R) Wi-Fi 6E AX211 160MHz", Kind = AdapterKind.WiFi, IsUp = true,
-                Addresses = new[] { new AdapterAddress(IPAddress.Parse("192.168.1.25"), 24) },
-                Gateways = new[] { IPAddress.Parse("192.168.1.1") },
-                DnsServers = new[] { IPAddress.Parse("192.168.1.1") },
+                Addresses = new[] { new AdapterAddress(IPAddress.Parse("10.99.94.68"), 24) },
+                Gateways = new[] { IPAddress.Parse("10.99.94.132") },
+                DnsServers = new[] { IPAddress.Parse("10.99.94.132") },
                 InterfaceMetric = 35, DhcpEnabled = true, Internet = InternetStatus.Available, SpeedBitsPerSecond = 866_000_000,
             },
             new()
             {
                 Index = Eth, Name = "Ethernet", Description = "Realtek USB GbE Family Controller", Kind = AdapterKind.Ethernet, IsUp = true,
-                Addresses = new[] { new AdapterAddress(IPAddress.Parse("10.25.30.50"), 24) },
-                Gateways = new[] { IPAddress.Parse("10.25.30.1") },
-                DnsServers = new[] { IPAddress.Parse("10.25.30.10"), IPAddress.Parse("10.25.30.11") },
+                Addresses = new[] { new AdapterAddress(IPAddress.Parse("10.20.30.130"), 24) },
+                Gateways = new[] { IPAddress.Parse("10.20.30.254") },
+                DnsServers = new[] { IPAddress.Parse("10.0.0.11"), IPAddress.Parse("10.0.0.12") },
                 DnsSuffix = "client.local", InterfaceMetric = 25, DhcpEnabled = true, Internet = InternetStatus.NotAvailable,
                 SpeedBitsPerSecond = 1_000_000_000,
             },
             new()
             {
                 Index = Vpn, Name = "Tailscale", Description = "Tailscale Tunnel", Kind = AdapterKind.Vpn, Product = "Tailscale", IsUp = true,
-                Addresses = new[] { new AdapterAddress(IPAddress.Parse("100.101.1.2"), 32) },
+                Addresses = new[] { new AdapterAddress(IPAddress.Parse("100.88.1.2"), 32) },
                 InterfaceMetric = 5, Internet = InternetStatus.Unknown,
             },
         };
@@ -58,7 +58,8 @@ public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDns
             foreach (var gw in a.Gateways) routes.Add(new RouteEntry(IPv4Prefix.Default, gw, a.Index, 0, "NetMgmt"));
         }
         routes.Add(new RouteEntry(IPv4Prefix.Parse("100.64.0.0/10"), IPAddress.Any, Vpn, 5, "NetMgmt"));
-        routes.Add(new RouteEntry(IPv4Prefix.Parse("172.31.0.0/16"), IPAddress.Parse("10.25.30.254"), Eth, 10, "NetMgmt")); // client static route
+        routes.Add(new RouteEntry(IPv4Prefix.Parse("10.0.0.0/8"), IPAddress.Any, Vpn, 5, "NetMgmt")); // Tailscale subnet route, as seen on site
+        routes.Add(new RouteEntry(IPv4Prefix.Parse("172.31.0.0/16"), IPAddress.Parse("10.20.30.200"), Eth, 10, "NetMgmt")); // client static route
         _state = new NetworkState { Adapters = adapters, Routes = routes, NrptRules = Array.Empty<NrptRule>() };
     }
 
@@ -75,6 +76,11 @@ public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDns
         if (plan.ClientAdapter is { } client)
             foreach (var net in plan.ClientNetworks)
                 results.Add(new VerificationResult(BestInterface(net.FirstHost) == client.Index, $"{net} → {client.Name} (simulated)"));
+        if (plan.ClientAdapter is { } c2)
+            foreach (var dns in c2.DnsServersV4)
+                results.Add(new VerificationResult(BestInterface(dns) == c2.Index, $"Client DNS {dns} → {(BestInterface(dns) == c2.Index ? c2.Name : "another adapter")} (simulated)"));
+        if (plan.ClientAdapter is { } c3)
+            results.Add(new VerificationResult(BestInterface(IPAddress.Parse("10.0.5.20")) == c3.Index, $"Internal server 10.0.5.20 → {(BestInterface(IPAddress.Parse("10.0.5.20")) == c3.Index ? c3.Name : "another adapter")} (simulated)"));
         if (applied.Count > 0) results.Add(new VerificationResult(true, "All changes are temporary (simulated)"));
         return results;
     }

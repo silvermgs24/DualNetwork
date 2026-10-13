@@ -69,12 +69,26 @@ public sealed class DualNetworkController
 
     private RoutingPlan Plan(NetworkState state)
     {
-        var plan = RoutingPlanner.Build(state, _settings(), Journal.ToOwned());
+        var settings = _settings();
+        var plan = RoutingPlanner.Build(state, settings, Journal.ToOwned());
+        // Split DNS was found unusable on this exact client network: plan again without it.
+        if (_splitDnsDisabled is { } off && plan.ClientAdapter is { } client && ClientFingerprint(client) == off.Fingerprint)
+        {
+            var s = settings.Clone();
+            s.SplitDnsDisabledReason = off.Reason;
+            plan = RoutingPlanner.Build(state, s, Journal.ToOwned());
+        }
         foreach (var e in NetworkChangeDescriber.Describe(LastState, state)) _log.Write(LogLevel.Info, e);
         LastState = state;
         LastPlan = plan;
         return plan;
     }
+
+    /// <summary>Client network for which split DNS was switched off, and why. Cleared automatically when the client network changes.</summary>
+    private (string Fingerprint, string Reason)? _splitDnsDisabled;
+
+    private static string ClientFingerprint(AdapterInfo client) =>
+        $"{client.Index}|{string.Join(",", client.Subnets)}|{string.Join(",", client.DnsServersV4)}|{client.DnsSuffix}";
 
     // ------------------------------------------------------------------ enable
 
@@ -168,18 +182,20 @@ public sealed class DualNetworkController
         return await ReconcileAsync(reason, ct);
     }
 
-    private bool Verify(RoutingPlan plan)
+    private async Task<IReadOnlyList<VerificationResult>> VerifyAsync(RoutingPlan plan)
     {
-        if (_verifier is null) return true;
+        if (_verifier is null) return Array.Empty<VerificationResult>();
         IReadOnlyList<VerificationResult> results;
-        try { results = _verifier.Verify(plan, Journal.Routes); }
+        // Off the caller's thread: the OS checks may block (DNS queries, PowerShell), and the caller may be a UI thread.
+        var applied = Journal.Routes.ToList();
+        try { results = await Task.Run(() => _verifier.Verify(plan, applied)); }
         catch (Exception ex)
         {
             _log.Write(LogLevel.Warning, $"Self-check could not run: {ex.Message}");
-            return true;
+            return Array.Empty<VerificationResult>();
         }
         foreach (var r in results) _log.Write(r.Ok ? LogLevel.Success : LogLevel.Error, (r.Ok ? "Self-check ✓ " : "Self-check ✗ ") + r.Message);
-        return results.All(r => r.Ok);
+        return results;
     }
 
     // ------------------------------------------------------------------ reconcile
@@ -245,7 +261,24 @@ public sealed class DualNetworkController
             else
             {
                 LogOutcome(plan);
-                verified = Verify(plan);
+                var checks = await VerifyAsync(plan);
+                verified = checks.All(r => r.Ok);
+
+                // Split DNS sends internal names *only* to the client DNS. If that DNS cannot be used even with the
+                // routes in place, the rule would make things worse than Windows' normal DNS — so take it back out.
+                var dnsChecks = checks.Where(r => r.Issue == VerificationIssue.ClientDnsUnusable).ToList();
+                var dnsProblem = dnsChecks.Count > 0 && dnsChecks.All(r => !r.Ok) ? dnsChecks[0] : null; // one working server is enough
+                if (dnsProblem is not null && plan.NrptRules.Count > 0 && plan.ClientAdapter is { } client)
+                {
+                    _splitDnsDisabled = (ClientFingerprint(client), $"the client DNS cannot be used ({dnsProblem.Message}).");
+                    _log.Write(LogLevel.Warning, "Split DNS switched off for this network because the client DNS cannot be used; Windows' normal DNS takes over");
+                    plan = Plan(state);
+                    var dnsDiff = Reconciler.Diff(Journal.Routes, Journal.NrptRules, plan.Routes, plan.NrptRules, state);
+                    try { await ApplyAsync(dnsDiff, state, ct); }
+                    catch (Exception ex) { _log.Write(LogLevel.Error, $"Could not remove the split-DNS rule: {ex.Message}"); }
+                    // Routing itself is fine if only the DNS checks failed.
+                    verified = checks.Where(r => r.Issue != VerificationIssue.ClientDnsUnusable).All(r => r.Ok);
+                }
             }
             LastReconcile = DateTimeOffset.Now;
             return new OperationResult(verified, verified ? "Re-evaluated" : "Applied, but the self-check found a problem (see log)", plan)

@@ -311,7 +311,10 @@
                         <Border Grid.Column="2" Style="{StaticResource Card}" VerticalAlignment="Top">
                             <StackPanel>
                                 <DockPanel Margin="0,0,0,12">
-                                    <Button DockPanel.Dock="Right" Content="Run Network Test" Command="{Binding RunTestCommand}" Style="{StaticResource PrimaryButton}" />
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Content="Save report" Command="{Binding SaveReportCommand}" Margin="0,0,8,0" ToolTip="Saves a text file with adapters, routes, DNS rules, the plan, the test results and the log to your Desktop" />
+                                        <Button Content="Run Network Test" Command="{Binding RunTestCommand}" Style="{StaticResource PrimaryButton}" />
+                                    </StackPanel>
                                     <StackPanel>
                                         <TextBlock Text="NETWORK TEST" Style="{StaticResource SectionTitle}" Margin="0,0,0,2" />
                                         <TextBlock Text="{Binding TestSummary}" Style="{StaticResource Muted}" />
@@ -448,7 +451,8 @@
                                            Text="The directly connected client subnet always stays on Ethernet, and routes supplied by the client network are always preserved. When the client network has a gateway, Internet traffic is kept on Wi-Fi, so internal networks behind that gateway need their own routes:" />
                                 <CheckBox Content="Route the private range that contains the Ethernet address (e.g. 10.0.0.0/8) via the client gateway" IsChecked="{Binding RouteContainingBlock}" />
                                 <CheckBox Content="Route all private ranges (10/8, 172.16/12, 192.168/16) via the client gateway — your Wi-Fi LAN stays on Wi-Fi" IsChecked="{Binding RouteAllBlocks}" />
-                                <TextBlock Text="Additional client networks (one per line, e.g. 100.64.10.0/24)" Margin="0,12,0,4" />
+                                <CheckBox Content="The client network takes priority over VPN routes for these ranges (e.g. a Tailscale subnet route for 10.0.0.0/8)" IsChecked="{Binding ClientWinsOverVpn}" />
+                                <TextBlock Text="Additional client networks (one per line, e.g. 10.0.0.0/16)" Margin="0,12,0,4" />
                                 <TextBox Text="{Binding ExtraPrefixes, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="70"
                                          VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource MonoFont}" />
                             </StackPanel>

@@ -37,7 +37,8 @@ The full reasoning, refusal rules and Windows limitations are in **[docs/DESIGN.
    host routes.
 4. **Split DNS.** It adds an NRPT rule so the client's DNS suffix (e.g. `*.client.local`) resolves via
    the client DNS servers. Other names keep Windows' normal resolution. Adapter DNS settings are never
-   replaced.
+   replaced. After applying, it queries the client DNS directly; if no client DNS server can answer for
+   the domain, the rule is removed again for that network and Windows' normal DNS is used.
 5. **Watch and converge.** It monitors route, interface and address changes, and polls every 30 s.
    Unplugging Ethernet removes everything. Replugging, changing Wi-Fi networks or a DHCP change
    recalculates the routes. If a full-tunnel VPN comes up, Dual Network stands down.
@@ -112,13 +113,14 @@ The app does everything on its own; the CLI is only for scripting and troublesho
 | `dualnet restore` | Remove every Dual Network change | yes |
 | `dualnet startup on\|off` | Register or remove the sign-in task | yes |
 | `dualnet snapshot` | Dump the current configuration as JSON | no |
+| `dualnet report` | Save a support report (adapters, routes, DNS rules, plan, network test, log) to the Desktop | no |
 
 ## The app
 
 | Tab | Contents |
 |---|---|
 | **Overview** | Dual Network Mode (ON / STANDBY / OFF) with one **Turn on / Turn off** button, live routing status (asked from Windows via `GetBestRoute2`), DNS per adapter, notices, and every adapter with IP, subnet, gateway, metric, DNS, DHCP/static, speed and role (Internet / Client Network / VPN / Virtual). |
-| **Diagnostics** | Network status summary and **Run Network Test**: link state, gateway ping, internal reachability (client DNS/gateway), Internet test (`msftconnecttest`), whether Ethernet itself has Internet, public and internal DNS resolution, and the real default route and client route. Advanced mode adds the full routing table, with Dual Network's routes marked ★. |
+| **Diagnostics** | Network status summary, **Run Network Test** and **Save report**. The test covers link state, gateway ping, each client DNS server queried directly (and which adapter Windows uses to reach it), Internet test (`msftconnecttest`), whether Ethernet itself has Internet, public and internal DNS resolution, and the real default route and client route. Advanced mode adds the full routing table, with Dual Network's routes marked ★. |
 | **Log** | A timestamped log for troubleshooting, including the self-checks. *Show decision details* adds the planner's step-by-step trace. Also written to `%LOCALAPPDATA%\DualNetwork\logs`. |
 | **Settings** | Start with Windows, notifications, overriding the adapters (e.g. USB tethering), the preferred Internet path when both networks have Internet, client ranges and extra client networks, internal domains, split DNS on/off, and Advanced mode. Saved settings take effect immediately. |
 
@@ -199,7 +201,7 @@ the demo.
 dotnet test tests/DualNetwork.Core.Tests
 ```
 
-84 tests cover:
+92 tests cover:
 
 * the two core cases from the spec (Ethernet with and without a gateway);
 * client ranges derived from the actual address rather than hard-coded;
@@ -212,6 +214,8 @@ dotnet test tests/DualNetwork.Core.Tests
 * stable re-planning when our own routes are present;
 * manual role overrides (USB tethering);
 * the controller: snapshot → apply → journal, exact restore verified against the snapshot, rollback when a step fails, never taking over pre-existing routes, Ethernet unplug/replug, Wi-Fi roaming, a VPN starting, Windows dropping a route, no-op reconciles, crash recovery and resume, and cleaning up orphaned rules;
+* the first real site visit: a Wi-Fi hotspot inside 10.0.0.0/8, client DNS and servers in 10.0.x.x, and a Tailscale route for 10.0.0.0/8 (the client network now wins for its own ranges, and the client DNS servers are always routed to the client network);
+* split DNS that switches itself off when the client DNS cannot be used, and is tried again on the next network;
 * automatic mode: activation without a client network (stand by, then apply when the cable is plugged in, with the snapshot taken right before the first change), idempotence, failed self-checks, and the admin requirement;
 * prefix maths, adapter classification, route selection and snapshot diffs.
 
@@ -219,7 +223,7 @@ dotnet test tests/DualNetwork.Core.Tests
 
 | Area | Status |
 |---|---|
-| Decision engine, controller, automatic mode | ✅ 84 unit tests passing |
+| Decision engine, controller, automatic mode | ✅ 92 unit tests passing, including a reproduction of the first site visit (hotspot in 10.x, Tailscale routing 10.0.0.0/8, DNS in 10.0.x.x) |
 | Reading adapters, routes and metrics via the IP Helper API | ✅ Verified live: the struct offsets match `Get-NetRoute` and `Get-NetIPInterface` exactly |
 | `GetBestRoute2`, Internet probe, ping/DNS/HTTP diagnostics, NRPT listing, persistent-store query | ✅ Verified live, non-elevated |
 | Automatic flow: turns on at launch → applies → self-check → unplug/replug → Turn off/on; close-to-tray; second launch brings the window back | ✅ Verified in `--demo` (UI Automation + screenshots) |

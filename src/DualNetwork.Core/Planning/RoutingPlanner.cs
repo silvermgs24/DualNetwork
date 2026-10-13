@@ -324,32 +324,66 @@ public static class RoutingPlanner
                     continue;
                 }
 
+                // A VPN (e.g. a Tailscale subnet route) may claim the same addresses. While plugged into the client network,
+                // the client's own ranges take priority by default: a broader VPN route loses on prefix length anyway, and an
+                // identical one is beaten by splitting the range in two more specific halves. Narrower VPN routes keep working.
+                var targets = new List<IPv4Prefix> { p };
                 var vpn = _foreign.FirstOrDefault(r => IsVpnIf(r.InterfaceIndex) && r.Destination.Overlaps(p) && r.Destination.Length <= p.Length);
                 if (vpn is not null)
                 {
-                    _warnings.Add(new PlanNote(Severity.Warning, $"Skipped client network {p}: the VPN {NameOf(vpn.InterfaceIndex)} routes {vpn.Destination}, and adding {p} would take traffic away from it."));
-                    continue;
+                    if (!_settings.ClientNetworkWinsOverVpn)
+                    {
+                        _warnings.Add(new PlanNote(Severity.Warning, $"Skipped client network {p}: the VPN {NameOf(vpn.InterfaceIndex)} routes {vpn.Destination} (Settings: VPN has priority)."));
+                        continue;
+                    }
+                    targets = SplitPastVpnRoutes(p);
+                    _warnings.Add(new PlanNote(Severity.Warning,
+                        $"The VPN {NameOf(vpn.InterfaceIndex)} also routes {vpn.Destination}. While you are on the client network, {p} goes to {client.Name}; " +
+                        "the VPN keeps its other routes (change this in Settings)."));
                 }
+                foreach (var inner in _foreign.Where(r => IsVpnIf(r.InterfaceIndex) && p.Contains(r.Destination) && r.Destination.Length > p.Length && r.Destination != p))
+                    _trace.Add($"{inner.Destination} stays on the VPN {NameOf(inner.InterfaceIndex)} (more specific than {p})");
 
-                var same = _foreign.Where(r => r.Destination == p).ToList();
-                if (same.Any(r => r.InterfaceIndex == client.Index))
+                foreach (var t in targets)
                 {
-                    _trace.Add($"{p}: the client network already routes it on {client.Name}");
-                    continue;
-                }
-                if (same.Count > 0)
-                {
-                    _warnings.Add(new PlanNote(Severity.Warning, $"Skipped client network {p}: a route for it already exists on {NameOf(same[0].InterfaceIndex)}."));
-                    continue;
-                }
+                    var same = _foreign.Where(r => r.Destination == t && !IsVpnIf(r.InterfaceIndex)).ToList();
+                    if (same.Any(r => r.InterfaceIndex == client.Index))
+                    {
+                        _trace.Add($"{t}: the client network already routes it on {client.Name}");
+                        continue;
+                    }
+                    if (same.Count > 0)
+                    {
+                        _warnings.Add(new PlanNote(Severity.Warning, $"Skipped client network {t}: a route for it already exists on {NameOf(same[0].InterfaceIndex)}."));
+                        continue;
+                    }
 
-                foreach (var w in internet.Subnets.Where(p.Contains))
-                    _trace.Add($"{w} stays on {internet.Name} (more specific than {p})");
+                    foreach (var w in internet.Subnets.Where(t.Contains))
+                        _trace.Add($"{w} stays on {internet.Name} (more specific than {t})");
 
-                _routes.Add(new RouteSpec(p, gw, client.Index, client.Name, _settings.RouteMetric, RoutePurpose.ClientRange,
-                    $"Internal destinations in {p} ({source}) were reached through the client's default route. Keep them on {client.Name} via {gw}."));
-                _trace.Add($"Plan: client range {p} via {gw} on {client.Name}");
+                    _routes.Add(new RouteSpec(t, gw, client.Index, client.Name, _settings.RouteMetric, RoutePurpose.ClientRange,
+                        $"Internal destinations in {t} ({source}) were reached through the client's default route. Keep them on {client.Name} via {gw}."));
+                    _trace.Add($"Plan: client range {t} via {gw} on {client.Name}");
+                }
             }
+        }
+
+        /// <summary>Splits <paramref name="p"/> into halves until no piece is identical to a VPN route (max 4 levels).</summary>
+        private List<IPv4Prefix> SplitPastVpnRoutes(IPv4Prefix p)
+        {
+            var result = new List<IPv4Prefix>();
+            var pending = new Stack<IPv4Prefix>();
+            pending.Push(p);
+            while (pending.Count > 0)
+            {
+                var x = pending.Pop();
+                var identical = _foreign.Any(r => IsVpnIf(r.InterfaceIndex) && r.Destination == x);
+                if (!identical || x.Length >= 32 || x.Length - p.Length >= 4) { result.Add(x); continue; }
+                var half = x.Length + 1;
+                pending.Push(new IPv4Prefix(x.Network | (1u << (32 - half)), half));
+                pending.Push(new IPv4Prefix(x.Network, half));
+            }
+            return result;
         }
 
         // ---------------------------------------------------------------- DNS reachability
@@ -363,11 +397,10 @@ public static class RoutingPlanner
                 if (client.IsOnLink(dns)) continue;
                 var hit = RouteTable.Lookup(dns, simulated, _state);
                 if (hit?.InterfaceIndex == client.Index) { _trace.Add($"Client DNS {dns} → {client.Name} (already routed)"); continue; }
+                // The client DNS addresses come from the client's own DHCP, so they always belong on the client network —
+                // even when a VPN route (e.g. a Tailscale subnet route) happens to cover them.
                 if (hit is not null && IsVpnIf(hit.InterfaceIndex))
-                {
-                    _warnings.Add(new PlanNote(Severity.Warning, $"Client DNS server {dns} is routed into the VPN {NameOf(hit.InterfaceIndex)}; left as is."));
-                    continue;
-                }
+                    _trace.Add($"Client DNS {dns} currently routes into the VPN {NameOf(hit.InterfaceIndex)}; pinning it to {client.Name}");
                 if (client.Gateway is null)
                 {
                     _warnings.Add(new PlanNote(Severity.Warning, $"Client DNS server {dns} is outside the client network and {client.Name} has no gateway, so it may be unreachable."));
@@ -406,6 +439,11 @@ public static class RoutingPlanner
 
         private void PlanNrpt(AdapterInfo client)
         {
+            if (_settings.SplitDnsDisabledReason is { } why)
+            {
+                _warnings.Add(new PlanNote(Severity.Warning, $"Split DNS is off for this network: {why} Windows' normal DNS is used instead."));
+                return;
+            }
             if (!_settings.ManageDns) { _trace.Add("DNS management is turned off in Settings."); return; }
 
             var servers = client.DnsServersV4.Distinct().Select(s => s.ToString()).ToList();

@@ -118,10 +118,21 @@ active) when:
 Individual changes are **skipped with a warning** (the rest of the plan still applies) when:
 
 * a client range is equal to or inside the Wi-Fi subnet;
-* a client range would capture traffic of a VPN route that is broader or of
-  equal length (a split-tunnel VPN);
 * a client range already exists on another non-VPN adapter;
 * an NRPT rule for the same namespace already exists and is not ours.
+
+**Split-tunnel VPN routes that overlap the client network** (learned on the first site visit: a Tailscale
+subnet route for `10.0.0.0/8` captured the client's DNS servers and servers in `10.0.x.x`). While you are
+plugged into the client network, the client's own ranges win by default, with a warning:
+
+* A broader VPN route already loses to the client range on prefix length.
+* An identical VPN route is beaten by splitting the range into two halves (`10.0.0.0/9` + `10.128.0.0/9`).
+* VPN routes **narrower** than the client range keep working.
+* Client DNS servers always get a route to the client network, because their addresses come from the
+  client's own DHCP.
+
+Settings → *The client network takes priority over VPN routes* switches this back to "VPN wins" (the
+range is then skipped with a warning). Full-tunnel VPNs are still never overridden (see the table above).
 
 ## 6. Known Windows limitations
 
@@ -141,3 +152,15 @@ Individual changes are **skipped with a warning** (the rest of the plan still ap
 * **Group Policy NRPT.** Rules pushed by domain Group Policy take precedence
   over local NRPT rules. The app reports existing rules but cannot override
   policy.
+
+## 7. Split DNS must never make things worse
+
+An NRPT rule sends internal names **only** to the client DNS servers. On the first site visit those servers
+were unreachable (routed into Tailscale), so the rule turned "internal names resolve through the public DNS"
+into "internal names never resolve".
+
+After every change, the self-check now queries each client DNS server directly (a raw SOA query for the
+internal domain) and asks Windows which adapter it uses to reach it. If **no** client DNS server answers
+for the domain, the controller removes the NRPT rule for that client network and says so in the log and on
+the overview. The rule is planned again automatically when the client network changes (different
+adapter, subnet, DNS servers or suffix).

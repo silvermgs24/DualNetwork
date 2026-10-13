@@ -465,3 +465,66 @@ public class AutomaticModeTests
         Assert.False(c.IsEnabled);
     }
 }
+
+public class SplitDnsSafetyTests
+{
+    private sealed class DnsDeadVerifier : IRouteVerifier
+    {
+        public bool DnsWorks;
+        public IReadOnlyList<VerificationResult> Verify(RoutingPlan plan, IReadOnlyList<RouteSpec> applied) => new[]
+        {
+            new VerificationResult(true, "Internet → Wi-Fi"),
+            new VerificationResult(DnsWorks, DnsWorks ? "Client DNS answers" : "Client DNS 10.20.201.11 did not answer", VerificationIssue.ClientDnsUnusable),
+        };
+    }
+
+    private static NetworkState Site(string dns = "10.20.201.11") =>
+        Create().WithWiFi().WithEthernet("10.20.30.130/24", gateway: "10.20.30.254", dns: new[] { dns }, suffix: "client-example.org").Build();
+
+    [Fact]
+    public async Task Unusable_client_dns_removes_the_split_dns_rule_but_keeps_routing()
+    {
+        var sys = new FakeSystem(Site());
+        var c = new DualNetworkController(sys, sys, sys, sys, sys, () => new PlannerSettings(), new DnsDeadVerifier());
+
+        var r = await c.ActivateAsync("App started");
+
+        Assert.True(r.Success);                                       // routing itself is fine
+        Assert.Empty(sys.Saved.NrptRules);                            // rule taken back out
+        Assert.Empty(sys.State.NrptRules!);
+        Assert.Equal(2, sys.RoutesOn(WiFi, 1).Count());               // Internet override kept
+        Assert.Contains(sys.Saved.Routes, x => x.Purpose == RoutePurpose.ClientRange);
+        Assert.Contains(c.LastPlan!.Warnings, w => w.Text.StartsWith("Split DNS is off for this network"));
+        Assert.Contains(sys.Log, l => l.Contains("Split DNS switched off"));
+
+        sys.Writes.Clear();
+        await c.ReconcileAsync("Periodic check");
+        Assert.DoesNotContain(sys.Writes, w => w.StartsWith("+nrpt"));  // not re-added on the same network
+    }
+
+    [Fact]
+    public async Task Split_dns_is_tried_again_on_a_different_client_network()
+    {
+        var sys = new FakeSystem(Site());
+        var verifier = new DnsDeadVerifier();
+        var c = new DualNetworkController(sys, sys, sys, sys, sys, () => new PlannerSettings(), verifier);
+        await c.ActivateAsync("App started");
+
+        verifier.DnsWorks = true;
+        sys.State = Site("10.20.201.50") with { Routes = sys.State.Routes, NrptRules = sys.State.NrptRules };
+        await c.ReconcileAsync("DHCP change");
+
+        Assert.Single(sys.Saved.NrptRules);
+    }
+
+    [Fact]
+    public async Task Working_client_dns_keeps_the_split_dns_rule()
+    {
+        var sys = new FakeSystem(Site());
+        var c = new DualNetworkController(sys, sys, sys, sys, sys, () => new PlannerSettings(), new DnsDeadVerifier { DnsWorks = true });
+
+        await c.ActivateAsync("App started");
+
+        Assert.Single(sys.Saved.NrptRules);
+    }
+}

@@ -38,6 +38,7 @@ public sealed class MainViewModel : ObservableObject
         CopyLogCommand = new RelayCommand(() => Clipboard.SetText(string.Join(Environment.NewLine, VisibleLog.Select(l => l.ToString()))));
         ClearLogCommand = new RelayCommand(() => { _allLog.Clear(); VisibleLog.Clear(); });
         ToggleCableCommand = new RelayCommand(ToggleCableAsync, () => IsDemo && !IsBusy);
+        SaveReportCommand = new RelayCommand(SaveReport);
         ViewChangesCommand = new RelayCommand(ViewChanges, () => _host.Controller.LastPlan is not null);
 
         foreach (var e in _host.Log.Recent) AddLog(e);
@@ -168,6 +169,8 @@ public sealed class MainViewModel : ObservableObject
     public bool RouteContainingBlock { get => _routeContainingBlock; set => Set(ref _routeContainingBlock, value); }
     private bool _routeAllBlocks;
     public bool RouteAllBlocks { get => _routeAllBlocks; set => Set(ref _routeAllBlocks, value); }
+    private bool _clientWinsOverVpn = true;
+    public bool ClientWinsOverVpn { get => _clientWinsOverVpn; set => Set(ref _clientWinsOverVpn, value); }
     private bool _manageDns = true;
     public bool ManageDns { get => _manageDns; set => Set(ref _manageDns, value); }
     private string _extraPrefixes = "";
@@ -203,6 +206,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand CopyLogCommand { get; }
     public RelayCommand ClearLogCommand { get; }
     public RelayCommand ToggleCableCommand { get; }
+    public RelayCommand SaveReportCommand { get; }
     public RelayCommand ViewChangesCommand { get; }
 
     /// <summary>Shows a plan in a dialog. Set by the window. The bool is "read-only" (only a Close button).</summary>
@@ -506,6 +510,20 @@ public sealed class MainViewModel : ObservableObject
         finally { IsTesting = false; }
     }
 
+    private void SaveReport()
+    {
+        try
+        {
+            var path = SupportReport.Write(_host, TestResults.ToList());
+            _host.Log.Write(LogLevel.Info, $"Support report saved: {path}");
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _host.Log.Write(LogLevel.Error, $"Could not save the report: {ex.Message}");
+        }
+    }
+
     // ------------------------------------------------------------------ settings
 
     private void LoadSettingsIntoForm()
@@ -517,6 +535,7 @@ public sealed class MainViewModel : ObservableObject
         RouteContainingBlock = s.Planner.RouteContainingPrivateBlock;
         RouteAllBlocks = s.Planner.RouteAllPrivateBlocks;
         ManageDns = s.Planner.ManageDns;
+        ClientWinsOverVpn = s.Planner.ClientNetworkWinsOverVpn;
         ExtraPrefixes = string.Join(Environment.NewLine, s.Planner.ExtraClientPrefixes);
         InternalDomains = string.Join(Environment.NewLine, s.Planner.ExtraInternalDomains);
         ShowAdvanced = s.ShowAdvanced;
@@ -545,6 +564,7 @@ public sealed class MainViewModel : ObservableObject
                 RouteContainingPrivateBlock = RouteContainingBlock,
                 RouteAllPrivateBlocks = RouteAllBlocks,
                 ManageDns = ManageDns,
+                ClientNetworkWinsOverVpn = ClientWinsOverVpn,
                 ExtraClientPrefixes = Lines(ExtraPrefixes),
                 ExtraInternalDomains = Lines(InternalDomains),
                 RouteMetric = _host.Settings.Planner.RouteMetric,
@@ -731,7 +751,7 @@ public sealed class MainViewModel : ObservableObject
         list.Add(new("Wi-Fi connectivity", Severity.Good, $"{wifi?.Name} connected · {string.Join(", ", wifi?.UsableAddresses ?? Array.Empty<AdapterAddress>())}"));
         if (client?.IsUp == true)
         {
-            list.Add(new("Internal network reachability", Severity.Good, $"Reached DNS 10.25.30.10, gateway {client.Gateway} (simulated)"));
+            list.Add(new("Internal network reachability", Severity.Good, $"Client DNS {string.Join(", ", client.DnsServersV4)} answers via {client.Name} (simulated)"));
             list.Add(new($"Internet through {client.Name}", Severity.Info, "Not available (expected for an isolated client network)"));
         }
         var internetIdx = _host.BestInterface(IPAddress.Parse("8.8.8.8"));
@@ -743,7 +763,7 @@ public sealed class MainViewModel : ObservableObject
         {
             var split = _host.Controller.Journal.NrptRules.Count > 0;
             list.Add(new("DNS resolution (internal: client.local)", split ? Severity.Good : Severity.Warning,
-                split ? "client.local → 10.25.30.10 via split-DNS rule (simulated)" : "Answered only if Windows happens to ask the client DNS first (no split-DNS rule)"));
+                split ? "client.local resolved by the client DNS via split-DNS rule (simulated)" : "Answered only if Windows happens to ask the client DNS first (no split-DNS rule)"));
         }
         list.Add(new("Current default route (Internet)", viaWifi ? Severity.Good : Severity.Problem,
             $"8.8.8.8 → {_host.Controller.LastState?.Adapter(internetIdx ?? -1)?.Name ?? "no route"}"));

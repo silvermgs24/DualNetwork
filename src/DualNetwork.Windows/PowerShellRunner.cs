@@ -42,13 +42,13 @@ internal static class PowerShellRunner
         cts.CancelAfter(timeout ?? TimeSpan.FromSeconds(30));
         try
         {
-            await p.WaitForExitAsync(cts.Token);
+            await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             try { p.Kill(entireProcessTree: true); } catch { /* already gone */ }
             throw new TimeoutException("PowerShell command timed out");
         }
-        return new Result(p.ExitCode, (await stdout).Trim(), (await stderr).Trim());
+        return new Result(p.ExitCode, (await stdout.ConfigureAwait(false)).Trim(), (await stderr.ConfigureAwait(false)).Trim());
     }
 }
