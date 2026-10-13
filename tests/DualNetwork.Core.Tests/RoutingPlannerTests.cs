@@ -14,6 +14,9 @@ public class RoutingPlannerTests
 
     private static string[] Prefixes(RoutingPlan p) => p.Routes.Select(r => r.Destination.ToString()).ToArray();
 
+    /// <summary>The pre-1.3 default: only the private range that contains the Ethernet address.</summary>
+    private static PlannerSettings SingleBlock => new() { RouteAllPrivateBlocks = false };
+
     /// <summary>Applies a plan's routes to a state, as Windows would after enabling.</summary>
     private static List<RouteEntry> After(NetworkState s, RoutingPlan p) =>
         s.Routes.Concat(p.Routes.Select(r => new RouteEntry(r.Destination, r.NextHop, r.InterfaceIndex, r.Metric))).ToList();
@@ -64,12 +67,12 @@ public class RoutingPlannerTests
     public void Client_range_is_derived_from_the_ethernet_address_not_hardcoded()
     {
         var s172 = Create().WithWiFi().WithEthernet("172.20.5.9/24", gateway: "172.20.5.1").Build();
-        Assert.Contains("172.16.0.0/12", Prefixes(Plan(s172)));
-        Assert.DoesNotContain("10.0.0.0/8", Prefixes(Plan(s172)));
+        Assert.Contains("172.16.0.0/12", Prefixes(Plan(s172, SingleBlock)));
+        Assert.DoesNotContain("10.0.0.0/8", Prefixes(Plan(s172, SingleBlock)));
 
         // A client using public addresses internally: only the on-link subnet is known.
         var sPublic = Create().WithWiFi().WithEthernet("45.10.20.30/24", gateway: "45.10.20.1").Build();
-        var p = Plan(sPublic);
+        var p = Plan(sPublic, SingleBlock);
         Assert.Equal(new[] { "0.0.0.0/1", "128.0.0.0/1" }, Prefixes(p));
         Assert.Equal(Eth, Via(sPublic, p, "45.10.20.77"));
     }
@@ -238,7 +241,7 @@ public class RoutingPlannerTests
             .Route("10.0.0.0/8", "0.0.0.0", Vpn, 5)
             .Build();
 
-        var p = Plan(s, new PlannerSettings { ClientNetworkWinsOverVpn = false });
+        var p = Plan(s, new PlannerSettings { ClientNetworkWinsOverVpn = false, RouteAllPrivateBlocks = false });
 
         Assert.DoesNotContain(p.Routes, r => r.Purpose == RoutePurpose.ClientRange);
         Assert.Equal(Vpn, Via(s, p, "10.50.0.1"));
@@ -298,7 +301,7 @@ public class RoutingPlannerTests
             .Route("172.16.0.0/12", "0.0.0.0", Vpn, 5)
             .Build();
 
-        var p = Plan(s);
+        var p = Plan(s, SingleBlock);
 
         Assert.Contains("172.18.0.53/32", Prefixes(p));
         Assert.Equal(Eth, Via(s, p, "172.18.0.53"));
@@ -375,7 +378,7 @@ public class RoutingPlannerTests
         var s = Create().WithWiFi().WithEthernet("10.10.10.20/24", gateway: "10.10.10.1", dns: new[] { "172.18.0.53", "10.10.10.2" }).Build();
 
         // With the containing private block only (10/8), 172.18.0.53 is not covered.
-        var p = Plan(s);
+        var p = Plan(s, SingleBlock);
 
         var host = Assert.Single(p.Routes, r => r.Purpose == RoutePurpose.ClientDnsHost);
         Assert.Equal("172.18.0.53/32", host.Destination.ToString());
@@ -518,5 +521,75 @@ public class RoutingPlannerTests
         var s = Create().WithWiFi().WithEthernet().WithVpn().Build();
 
         Assert.Equal(PlanStatus.Refused, Plan(s, new PlannerSettings { ClientAdapterName = "Tailscale" }).Status);
+    }
+}
+
+public class AllPrivateRangesTests
+{
+    private static RoutingPlan Plan(NetworkState s, PlannerSettings? settings = null) => RoutingPlanner.Build(s, settings ?? new PlannerSettings());
+
+    private static int? Via(NetworkState s, RoutingPlan p, string ip) =>
+        RouteTable.Lookup(IPAddress.Parse(ip),
+            s.Routes.Concat(p.Routes.Select(r => new RouteEntry(r.Destination, r.NextHop, r.InterfaceIndex, r.Metric))), s)?.InterfaceIndex;
+
+    [Fact]
+    public void By_default_all_three_private_ranges_go_to_the_client_network()
+    {
+        var s = Create().WithWiFi("192.168.1.25/24", gateway: "192.168.1.1").WithEthernet("10.20.30.130/24", gateway: "10.20.30.254").Build();
+
+        var p = Plan(s);
+
+        var ranges = p.Routes.Where(r => r.Purpose == RoutePurpose.ClientRange).Select(r => r.Destination.ToString()).ToList();
+        Assert.Equal(new[] { "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16" }, ranges.OrderBy(x => x));
+        Assert.Equal(Eth, Via(s, p, "10.5.5.5"));
+        Assert.Equal(Eth, Via(s, p, "172.20.1.1"));
+        Assert.Equal(Eth, Via(s, p, "192.168.77.10"));
+        Assert.Equal(WiFi, Via(s, p, "192.168.1.1"));      // your own Wi-Fi network stays on Wi-Fi
+        Assert.Equal(WiFi, Via(s, p, "192.168.1.200"));
+        Assert.Equal(WiFi, Via(s, p, "8.8.8.8"));          // Internet stays on Wi-Fi
+    }
+
+    [Fact]
+    public void Phone_hotspot_and_tailscale_keep_working()
+    {
+        var s = Create().WithWiFi("172.20.10.2/28", gateway: "172.20.10.1", dns: new[] { "172.20.10.1" })   // iPhone hotspot
+            .WithEthernet("10.20.30.130/24", gateway: "10.20.30.254")
+            .WithVpn("100.88.1.2/32", "Tailscale").Route("100.64.0.0/10", "0.0.0.0", Vpn, 5)
+            .Build();
+
+        var p = Plan(s);
+
+        Assert.Equal(WiFi, Via(s, p, "172.20.10.1"));      // hotspot gateway and DNS
+        Assert.Equal(Eth, Via(s, p, "172.16.5.5"));         // other 172.16/12 addresses → client
+        Assert.Equal(Vpn, Via(s, p, "100.100.100.100"));    // Tailscale (100.64/10 is not a private range)
+        Assert.Equal(WiFi, Via(s, p, "1.1.1.1"));
+    }
+
+    [Fact]
+    public void A_private_range_that_is_the_wifi_network_itself_is_left_to_wifi()
+    {
+        // A corporate-style Wi-Fi using all of 172.16.0.0/12 as one subnet.
+        var s = Create().WithWiFi("172.17.4.4/12", gateway: "172.16.0.1").WithEthernet("10.20.30.130/24", gateway: "10.20.30.254").Build();
+
+        var p = Plan(s);
+
+        Assert.DoesNotContain(p.Routes, r => r.Destination.ToString() == "172.16.0.0/12");
+        Assert.Contains(p.Warnings, w => w.Text.Contains("172.16.0.0/12"));
+        Assert.Equal(WiFi, Via(s, p, "172.20.1.1"));
+        Assert.Equal(Eth, Via(s, p, "192.168.5.5"));
+    }
+
+    [Fact]
+    public void Wifi_dns_inside_another_private_range_is_pinned_to_wifi()
+    {
+        // Some hotel networks hand out a DNS server in a different private range than their own subnet.
+        var s = Create().WithWiFi("192.168.1.25/24", gateway: "192.168.1.1", dns: new[] { "10.255.0.53" })
+            .WithEthernet("172.16.8.20/24", gateway: "172.16.8.1").Build();
+
+        var p = Plan(s);
+
+        Assert.Contains("10.255.0.53/32", p.Routes.Select(r => r.Destination.ToString()));
+        Assert.Equal(WiFi, Via(s, p, "10.255.0.53"));
+        Assert.Equal(Eth, Via(s, p, "10.255.0.54"));
     }
 }

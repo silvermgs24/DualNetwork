@@ -9,11 +9,12 @@ namespace DualNetwork.Windows;
 
 /// <summary>
 /// In-memory network used by "--demo": a laptop on hotel Wi-Fi, plugged into a client network whose gateway
-/// has no Internet, with Tailscale running. Lets you try the whole flow without changing anything in Windows.
+/// has no Internet, and whose DNS servers and servers live in other private subnets. Lets you try the whole flow
+/// without changing anything in Windows.
 /// </summary>
 public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDnsPolicyWriter, IStateStore, IRouteVerifier
 {
-    private const int WiFi = 12, Eth = 7, Vpn = 40;
+    private const int WiFi = 12, Eth = 7;
     private NetworkState _state;
     private Journal _journal = new();
     private ConfigurationSnapshot? _snapshot;
@@ -39,12 +40,6 @@ public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDns
                 DnsSuffix = "client.local", InterfaceMetric = 25, DhcpEnabled = true, Internet = InternetStatus.NotAvailable,
                 SpeedBitsPerSecond = 1_000_000_000,
             },
-            new()
-            {
-                Index = Vpn, Name = "Tailscale", Description = "Tailscale Tunnel", Kind = AdapterKind.Vpn, Product = "Tailscale", IsUp = true,
-                Addresses = new[] { new AdapterAddress(IPAddress.Parse("100.88.1.2"), 32) },
-                InterfaceMetric = 5, Internet = InternetStatus.Unknown,
-            },
         };
         var routes = new List<RouteEntry>();
         foreach (var a in adapters)
@@ -57,8 +52,6 @@ public sealed class SimulatedNetwork : INetworkStateProvider, IRouteWriter, IDns
             }
             foreach (var gw in a.Gateways) routes.Add(new RouteEntry(IPv4Prefix.Default, gw, a.Index, 0, "NetMgmt"));
         }
-        routes.Add(new RouteEntry(IPv4Prefix.Parse("100.64.0.0/10"), IPAddress.Any, Vpn, 5, "NetMgmt"));
-        routes.Add(new RouteEntry(IPv4Prefix.Parse("10.0.0.0/8"), IPAddress.Any, Vpn, 5, "NetMgmt")); // Tailscale subnet route, as seen on site
         routes.Add(new RouteEntry(IPv4Prefix.Parse("172.31.0.0/16"), IPAddress.Parse("10.20.30.200"), Eth, 10, "NetMgmt")); // client static route
         _state = new NetworkState { Adapters = adapters, Routes = routes, NrptRules = Array.Empty<NrptRule>() };
     }

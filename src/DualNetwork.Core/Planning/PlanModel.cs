@@ -23,7 +23,7 @@ public sealed class PlannerSettings
     /// <summary>Route the RFC 1918 block that contains the client address (e.g. 10.0.0.0/8) to the client gateway.</summary>
     public bool RouteContainingPrivateBlock { get; set; } = true;
     /// <summary>Route all three RFC 1918 blocks to the client gateway.</summary>
-    public bool RouteAllPrivateBlocks { get; set; }
+    public bool RouteAllPrivateBlocks { get; set; } = true;
     /// <summary>Additional client networks reachable via the client gateway, e.g. "100.64.10.0/24".</summary>
     public List<string> ExtraClientPrefixes { get; set; } = new();
     /// <summary>Internal DNS namespaces to resolve via the client DNS, in addition to the DHCP-provided suffix.</summary>

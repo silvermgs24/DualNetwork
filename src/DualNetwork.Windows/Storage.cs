@@ -80,6 +80,11 @@ public sealed class JsonStateStore : IStateStore
 
 public sealed class AppSettings
 {
+    /// <summary>Bumped when a default changes in a way existing installs should receive (see Migrate).</summary>
+    /// Missing in files from 1.0–1.2, so it reads as 0 there; every save stamps the current version.
+    public int SettingsVersion { get; set; }
+    public const int CurrentVersion = 2;
+
     public PlannerSettings Planner { get; set; } = new();
     public bool ShowAdvanced { get; set; }
     public bool ShowAllAdapters { get; set; }
@@ -98,14 +103,35 @@ public static class SettingsStore
         try
         {
             if (File.Exists(AppPaths.Settings))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(AppPaths.Settings), JsonDefaults.Options) ?? new AppSettings();
+            {
+                var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(AppPaths.Settings), JsonDefaults.Options) ?? new AppSettings();
+                if (Migrate(s)) Save(s);
+                return s;
+            }
         }
         catch { /* fall back to defaults */ }
         return new AppSettings();
     }
 
-    public static void Save(AppSettings settings) =>
+    /// <summary>Applies changed defaults to settings saved by older versions. Returns true when something changed.</summary>
+    public static bool Migrate(AppSettings s)
+    {
+        var changed = false;
+        if (s.SettingsVersion < 2)
+        {
+            // 1.3: the client network covers all private ranges (10/8, 172.16/12, 192.168/16) by default.
+            s.Planner.RouteAllPrivateBlocks = true;
+            changed = true;
+        }
+        if (s.SettingsVersion != AppSettings.CurrentVersion) { s.SettingsVersion = AppSettings.CurrentVersion; changed = true; }
+        return changed;
+    }
+
+    public static void Save(AppSettings settings)
+    {
+        settings.SettingsVersion = AppSettings.CurrentVersion;
         AppPaths.WriteAtomic(AppPaths.Settings, JsonSerializer.Serialize(settings, JsonDefaults.Options));
+    }
 }
 
 public sealed record LogEntry(DateTime Time, LogLevel Level, string Message)

@@ -31,7 +31,7 @@ always returns Windows to its own configuration.
 | Problem | Change (only when needed) | Why this works |
 |---|---|---|
 | Ethernet has a default route that competes with Wi-Fi | Add `0.0.0.0/1` and `128.0.0.0/1` via the Wi-Fi gateway | Two `/1` routes are more specific than any `/0`, so they win over the client's default route **regardless of metrics or DHCP renewals**. The client's own default route stays where it is and is never touched. |
-| The client's default route used to carry traffic to *other* client subnets (behind the client gateway) | Add the RFC 1918 block that contains the Ethernet address (e.g. `10.0.0.0/8`) via the client gateway. Optional: all private blocks and user-defined prefixes. | Internal destinations that are not on-link still go to the client gateway. Routes the client already supplies (static or DHCP option 121) are longer, so they keep winning and are left untouched. |
+| The client's default route used to carry traffic to *other* client subnets (behind the client gateway) | Add all three RFC 1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) via the client gateway (default since 1.3; or only the range containing the Ethernet address). Your Wi-Fi subnet stays on Wi-Fi because it is more specific; a Wi-Fi subnet that spans a whole private range is skipped. Plus any networks you add in Settings. | Internal destinations that are not on-link still go to the client gateway. Routes the client already supplies (static or DHCP option 121) are longer, so they keep winning and are left untouched. |
 | A client DNS server is outside the client subnet and not covered by the routes above | `/32` host route via the client gateway | Internal DNS stays reachable. |
 | A Wi-Fi DNS server would be captured by a client range | `/32` host route via the Wi-Fi gateway | Public DNS stays on Wi-Fi. |
 | Internal names | NRPT rule per internal DNS suffix (from Ethernet's DHCP/connection suffix, plus suffixes the user adds) → client DNS servers | `*.corp.local` always goes to the client DNS. Other names keep Windows' normal resolution. The client's DNS settings are never replaced. |
@@ -121,7 +121,7 @@ Individual changes are **skipped with a warning** (the rest of the plan still ap
 * a client range already exists on another non-VPN adapter;
 * an NRPT rule for the same namespace already exists and is not ours.
 
-**Split-tunnel VPN routes that overlap the client network** (learned on the first site visit: a Tailscale
+**Split-tunnel VPN routes that overlap the client network** (learned on the first site visit: a VPN
 subnet route for `10.0.0.0/8` captured the client's DNS servers and servers in `10.0.x.x`). While you are
 plugged into the client network, the client's own ranges win by default, with a warning:
 
@@ -156,7 +156,7 @@ range is then skipped with a warning). Full-tunnel VPNs are still never overridd
 ## 7. Split DNS must never make things worse
 
 An NRPT rule sends internal names **only** to the client DNS servers. On the first site visit those servers
-were unreachable (routed into Tailscale), so the rule turned "internal names resolve through the public DNS"
+were unreachable (routed into a VPN), so the rule turned "internal names resolve through the public DNS"
 into "internal names never resolve".
 
 After every change, the self-check now queries each client DNS server directly (a raw SOA query for the

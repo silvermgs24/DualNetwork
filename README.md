@@ -32,9 +32,9 @@ The full reasoning, refusal rules and Windows limitations are in **[docs/DESIGN.
    place.
 3. **Keep the client reachable.** The directly connected subnet always stays on Ethernet, because
    Windows' on-link route is longer. Routes the client supplies (static, DHCP option 121) are preserved.
-   When the client has a gateway, the private range containing the Ethernet address (e.g. `10.0.0.0/8`)
-   and any networks you list are routed to the client gateway. DNS servers outside the subnet get `/32`
-   host routes.
+   When the client has a gateway, **all private networks** (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
+   and any networks you list are routed to the client gateway. Your own Wi-Fi network stays on Wi-Fi (its
+   on-link route is more specific), and DNS servers outside the subnet get `/32` host routes.
 4. **Split DNS.** It adds an NRPT rule so the client's DNS suffix (e.g. `*.client.local`) resolves via
    the client DNS servers. Other names keep Windows' normal resolution. Adapter DNS settings are never
    replaced. After applying, it queries the client DNS directly; if no client DNS server can answer for
@@ -83,8 +83,8 @@ The tray icon shows the state at a glance: green dot = on, amber = standing by, 
 publish\DualNetwork.exe --demo
 ```
 
-This runs the same app against a **simulated** network: hotel Wi-Fi, a client network whose gateway has no
-Internet, and Tailscale. It needs no admin rights and changes nothing in Windows. Use *Unplug client cable
+This runs the same app against a **simulated** network: hotel Wi-Fi, and a client network whose gateway has no
+Internet and whose DNS servers live in another private subnet. It needs no admin rights and changes nothing in Windows. Use *Unplug client cable
 (demo)* to watch it react.
 
 ### Build from source
@@ -213,7 +213,7 @@ the demo.
 dotnet test tests/DualNetwork.Core.Tests
 ```
 
-99 tests cover:
+103 tests cover:
 
 * the two core cases from the spec (Ethernet with and without a gateway);
 * client ranges derived from the actual address rather than hard-coded;
@@ -226,7 +226,8 @@ dotnet test tests/DualNetwork.Core.Tests
 * stable re-planning when our own routes are present;
 * manual role overrides (USB tethering);
 * the controller: snapshot → apply → journal, exact restore verified against the snapshot, rollback when a step fails, never taking over pre-existing routes, Ethernet unplug/replug, Wi-Fi roaming, a VPN starting, Windows dropping a route, no-op reconciles, crash recovery and resume, and cleaning up orphaned rules;
-* the first real site visit: a Wi-Fi hotspot inside 10.0.0.0/8, client DNS and servers in 10.0.x.x, and a Tailscale route for 10.0.0.0/8 (the client network now wins for its own ranges, and the client DNS servers are always routed to the client network);
+* the first real site visit: a Wi-Fi hotspot inside 10.0.0.0/8, client DNS and servers in other 10.x subnets, and a VPN route overlapping 10.0.0.0/8 (the client network now wins for its own ranges, and the client DNS servers are always routed to the client network);
+* all private ranges by default: home Wi-Fi in 192.168.x and phone hotspots in 172.20.10.x stay on Wi-Fi, a Wi-Fi network spanning a whole private range is left alone, and Wi-Fi DNS inside another private range is pinned to Wi-Fi;
 * split DNS that switches itself off when the client DNS cannot be used, and is tried again on the next network;
 * automatic mode: activation without a client network (stand by, then apply when the cable is plugged in, with the snapshot taken right before the first change), idempotence, failed self-checks, and the admin requirement;
 * permanent routes: parsing the `route -p` store, merging both stores, and explaining active, inactive and conflicting routes;
@@ -236,7 +237,7 @@ dotnet test tests/DualNetwork.Core.Tests
 
 | Area | Status |
 |---|---|
-| Decision engine, controller, automatic mode | ✅ 99 unit tests passing, including a reproduction of the first site visit (hotspot in 10.x, Tailscale routing 10.0.0.0/8, DNS in 10.0.x.x) |
+| Decision engine, controller, automatic mode | ✅ 103 unit tests passing, including a reproduction of the first site visit (hotspot in 10.x, client DNS in another 10.x subnet) |
 | Reading adapters, routes and metrics via the IP Helper API | ✅ Verified live: the struct offsets match `Get-NetRoute` and `Get-NetIPInterface` exactly |
 | `GetBestRoute2`, Internet probe, ping/DNS/HTTP diagnostics, NRPT listing, persistent-store query | ✅ Verified live, non-elevated |
 | Automatic flow: turns on at launch → applies → self-check → unplug/replug → Turn off/on; close-to-tray; second launch brings the window back | ✅ Verified in `--demo` (UI Automation + screenshots) |

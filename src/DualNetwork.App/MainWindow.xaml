@@ -536,9 +536,9 @@
                                 <TextBlock Text="CLIENT NETWORKS" Style="{StaticResource SectionTitle}" />
                                 <TextBlock Style="{StaticResource Muted}" Margin="0,0,0,8"
                                            Text="The directly connected client subnet always stays on Ethernet, and routes supplied by the client network are always preserved. When the client network has a gateway, Internet traffic is kept on Wi-Fi, so internal networks behind that gateway need their own routes:" />
-                                <CheckBox Content="Route the private range that contains the Ethernet address (e.g. 10.0.0.0/8) via the client gateway" IsChecked="{Binding RouteContainingBlock}" />
-                                <CheckBox Content="Route all private ranges (10/8, 172.16/12, 192.168/16) via the client gateway — your Wi-Fi LAN stays on Wi-Fi" IsChecked="{Binding RouteAllBlocks}" />
-                                <CheckBox Content="The client network takes priority over VPN routes for these ranges (e.g. a Tailscale subnet route for 10.0.0.0/8)" IsChecked="{Binding ClientWinsOverVpn}" />
+                                <CheckBox Content="Send all private networks to Ethernet: 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16 (recommended). Your own Wi-Fi network stays on Wi-Fi." IsChecked="{Binding RouteAllBlocks}" />
+                                <CheckBox Content="When the option above is off: send only the private range that contains the Ethernet address (e.g. 10.0.0.0/8)" IsChecked="{Binding RouteContainingBlock}" Margin="22,4,0,4" />
+                                <CheckBox Content="The client network takes priority over VPN routes for these ranges" IsChecked="{Binding ClientWinsOverVpn}" />
                                 <TextBlock Text="Additional client networks (one per line, e.g. 10.0.0.0/16)" Margin="0,12,0,4" />
                                 <TextBox Text="{Binding ExtraPrefixes, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" Height="70"
                                          VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource MonoFont}" />
